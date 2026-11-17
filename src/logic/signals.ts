@@ -1,4 +1,5 @@
 import { haversineKm, quakeTier, radiationTier, type AlertTier, type PagerLevel, type RadiationSample } from "./alerts"
+import { resolveItemUrl, yahooQuoteUrl } from "./links"
 import type { Gauge } from "./gauges"
 import type { MarketQuote } from "./markets"
 import { formatChange } from "./markets"
@@ -8,6 +9,12 @@ export type Signal = {
   title: string
   detail: string
   tier: AlertTier | "INFO"
+  kind: string
+  url: string
+  lat: number | null
+  lon: number | null
+  observedAt: string | null
+  figures: string | null
 }
 
 export type QuakeFact = {
@@ -18,6 +25,8 @@ export type QuakeFact = {
   tsunami: boolean
   lat: number
   lon: number
+  url: string
+  observedAt: string | null
 }
 
 export type GdacsFact = {
@@ -27,6 +36,7 @@ export type GdacsFact = {
   alert: string
   lat: number
   lon: number
+  url: string
 }
 
 export function buildSignals(input: {
@@ -45,6 +55,12 @@ export function buildSignals(input: {
       title: input.eonetLabel,
       detail: "NASA EONET events whose geometry falls in the last 30 days. This is a recent-event count, not a count of open incidents.",
       tier: "INFO",
+      kind: "EONET",
+      url: resolveItemUrl("eonet", null),
+      lat: null,
+      lon: null,
+      observedAt: null,
+      figures: null,
     })
   }
 
@@ -57,6 +73,12 @@ export function buildSignals(input: {
       title: `M${quake.mag.toFixed(1)} ${quake.place}`,
       detail: `PAGER ${pager}${quake.tsunami ? ", tsunami flag set" : ""}. ${assessment.reason}.`,
       tier: assessment.tier,
+      kind: "Quake",
+      url: quake.url,
+      lat: quake.lat,
+      lon: quake.lon,
+      observedAt: quake.observedAt,
+      figures: `M${quake.mag.toFixed(1)}`,
     })
   }
 
@@ -69,6 +91,12 @@ export function buildSignals(input: {
       title: `GDACS ${event.alert}: ${event.name}`,
       detail: `${event.eventType} alert from GDACS. Earthquake alerts are left to the USGS PAGER assessment.`,
       tier: alert === "red" ? "PRIORITY" : "INFO",
+      kind: "GDACS",
+      url: event.url,
+      lat: event.lat,
+      lon: event.lon,
+      observedAt: null,
+      figures: event.alert,
     })
   }
 
@@ -80,6 +108,12 @@ export function buildSignals(input: {
       title: `USGS and GDACS both have a quake near ${quake.place}`,
       detail: `${match.name} is within 500 km of the USGS epicenter. The toast level still follows USGS PAGER, not magnitude alone.`,
       tier: "INFO",
+      kind: "Quake",
+      url: quake.url,
+      lat: quake.lat,
+      lon: quake.lon,
+      observedAt: quake.observedAt,
+      figures: `M${quake.mag.toFixed(1)}`,
     })
   }
 
@@ -92,6 +126,12 @@ export function buildSignals(input: {
       title: `${sample.network === "epa" ? "EPA RadNet" : "Safecast"}: ${sample.label}`,
       detail: assessment.reason,
       tier: assessment.tier,
+      kind: "Radiation",
+      url: resolveItemUrl(sample.network === "epa" ? "epa-radnet" : "safecast", null),
+      lat: sample.lat,
+      lon: sample.lon,
+      observedAt: sample.observedAtMs ? new Date(sample.observedAtMs).toISOString() : null,
+      figures: `${sample.value} ${sample.unit}`,
     })
   }
 
@@ -104,6 +144,12 @@ export function buildSignals(input: {
           title: `VIX at ${quote.price.toFixed(2)}`,
           detail: `Level versus a 0–40 gauge scale. Session change is ${formatChange(quote.changePct)} from the prior close of ${quote.priorClose.toFixed(2)}, not from an older chart base.`,
           tier: quote.price >= 40 ? "PRIORITY" : "INFO",
+          kind: "Market",
+          url: yahooQuoteUrl(quote.symbol),
+          lat: null,
+          lon: null,
+          observedAt: null,
+          figures: formatChange(quote.changePct),
         })
       }
       continue
@@ -115,6 +161,12 @@ export function buildSignals(input: {
       title: `${quote.label} ${formatChange(quote.changePct)} vs prior close`,
       detail: `Last ${quote.price.toFixed(2)} against prior session close ${quote.priorClose.toFixed(2)}.`,
       tier: major && abs >= 3 ? "PRIORITY" : "INFO",
+      kind: "Market",
+      url: yahooQuoteUrl(quote.symbol),
+      lat: null,
+      lon: null,
+      observedAt: null,
+      figures: formatChange(quote.changePct),
     })
   }
 
@@ -125,6 +177,12 @@ export function buildSignals(input: {
         title: `GSCPI ${gauge.valueLabel}`,
         detail: "NY Fed Global Supply Chain Pressure Index is above its long-run average. This is not an oil series.",
         tier: "INFO",
+        kind: "Macro",
+        url: "https://www.newyorkfed.org/research/policy/gscpi",
+        lat: null,
+        lon: null,
+        observedAt: null,
+        figures: gauge.valueLabel,
       })
     }
     if (gauge.id === "yield-curve" && gauge.status === "ok") {
@@ -135,6 +193,12 @@ export function buildSignals(input: {
           title: "Treasury curve inverted",
           detail: `10-year minus 2-year is ${spread}.`,
           tier: "INFO",
+          kind: "Macro",
+          url: "https://fred.stlouisfed.org/series/T10Y2Y",
+          lat: null,
+          lon: null,
+          observedAt: null,
+          figures: spread,
         })
       }
     }

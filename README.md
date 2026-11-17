@@ -99,7 +99,7 @@ EONET is labeled as events in the last 30 days, not as “open” incidents.
 | ACLED | OAuth | Not configured until email and password are set. |
 | FRED API | Key | Optional. |
 | EIA | Key | Optional. |
-| NASA FIRMS | Key | Optional. Small boxes, including Nigeria. |
+| NASA FIRMS | Key | Optional. NOAA-20 for Nigeria and southern California, then NOAA-21, then MODIS, when a feed is empty or errors. |
 | Reddit | OAuth | Optional. |
 
 ### Added beyond a straight port, and why
@@ -111,18 +111,51 @@ EONET is labeled as events in the last 30 days, not as “open” incidents.
 - **Open-Meteo** — no key, and it places real observations in Africa and South America.
 - **Al Jazeera** — a non-Atlantic wire in the ticker.
 - **ISS position** — a single live lat/lon next to the CelesTrak element count.
-- **FRED public CSVs** for the yield curve and high-yield spread, so those gauges are real with zero keys. The FRED API remains a separate, optional source.
+- **FRED public CSVs** for the yield curve, high-yield spread, broad dollar, initial claims, 30-year mortgage, and M2. The FRED API remains a separate, optional source.
+- **Oil-transit chokepoints** as fixed geography. They are not a vessel feed.
+
+### Crucix views
+
+Crucix is the upstream dashboard (`dashboard/public/jarvis.html`). Worldmeter keeps the behavior that can run on the Workers free plan with data this sweep already has, or with a free keyless request.
+
+| Crucix view | Worldmeter |
+| --- | --- |
+| 3D globe, drag, zoom, markers | Board, 3D globe. Markers are HTML pins on the same projection as the texture. |
+| Flat map, pan, zoom | Board, Flat map. Land is the equirectangular texture. |
+| Region filters | Region buttons. |
+| News ticker | Ticker. A click opens the detail card. |
+| Risk gauges | Risk gauges, with the formula under each bar. |
+| Markets | Markets, and the Macro view grouped into indexes, energy, metals, and crypto, with the daily sparkline. |
+| Legend and layer toggles | Legend buttons under the map. |
+| Sensor grid | Sensors view. |
+| Nuclear watch | Nuclear view, from Safecast and EPA RadNet. |
+| Space watch | Space view: ISS, the CelesTrak stations count, and DONKI. |
+| Maritime chokepoints | Chokepoint markers. |
+| Signal core counts | On the Sensors view. |
+| Sweep delta | Delta view, and one line under the gauges. |
+| Cross-source signals | Signals panel. Toasts sit under the ticker. |
+| What signals mean | Glossary view. |
+| Full / lite visuals | Full and Lite. Lite stops the ticker and the auto-rotate, and starts on the flat map. |
+| Source list | Sources panel. |
+| Click a marker or a card for detail | Detail card, with Open source. A located item turns the map to it. |
 
 ### Left out, and why
 
-- **AISStream ship tracking.** It is a websocket. A free Worker invocation cannot hold that stream, so the panel does not pretend AIS is healthy.
+- **AISStream ship tracking.** It is a websocket. A free Worker invocation cannot hold that stream. The chokepoint markers are the static substitute, not live traffic.
+- **KiwiSDR coverage.** Crucix scraped a page. There is no stable record.
+- **Telegram OSINT channels and the OSINT map dots.** Those were scraped channel posts. They are not a feed with an item URL.
+- **Animated flight corridors.** Crucix drew those from OpenSky theater totals. Invented arcs would show traffic that was not measured. Flight markers are the adsb.lol positions.
+- **Starlink, OneWeb, and military satellite catalogs.** The files are megabytes. A free Worker has about 10 ms of CPU, so only the CelesTrak stations group is fetched.
 - **USPTO / PatentsView.** The old open API now expects a key and is not a live situational feed.
-- **Telegram channel scraping and KiwiSDR page scraping.** Both were marked healthy without a stable record of their own. They are omitted rather than shown as OK.
 - **ADS-B Exchange.** The flight layer is adsb.lol. The paid ADS-B Exchange API is not called.
 - **OpenSky.** Anonymous access is heavily rate limited. adsb.lol covers flights.
 - **UN Comtrade.** Monthly trade, and the current API is keyed. Not a 2-minute monitor.
-- **LLM trade ideas, Telegram bot, Discord bot.** They need long-lived credentials and are outside this board.
+- **LLM trade ideas and AI alert classification.** They need a model key and a long call. The rule-based signals stay.
+- **Telegram bot and Discord bot.** They need long-lived credentials and are not a dashboard view.
+- **Cinematic boot sequence.** It delayed the board without adding data.
+- **“Wartime stagflation” chip.** Crucix hardcoded that sentence. It is not computed from a series.
 - **IODA outage API.** It returned HTTP 500 during development, so it is not listed as a source.
+- **A 15-minute sweep.** Worldmeter sweeps every 2 minutes. The Sources panel is the integrity list: status, count, and last success.
 
 ## Deploy on Cloudflare (free plan)
 

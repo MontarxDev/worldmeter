@@ -47,6 +47,8 @@ export type MarketQuote = {
   price: number
   priorClose: number
   changePct: number
+  /** Up to eight recent daily closes, oldest first, for the macro sparkline. */
+  spark: number[]
 }
 
 export function quoteFromChart(input: ChartQuoteInput): MarketQuote | { error: string } {
@@ -63,12 +65,17 @@ export function quoteFromChart(input: ChartQuoteInput): MarketQuote | { error: s
   }
   const changePct = sessionChangePct(price, prior)
   if (changePct == null) return { error: `${input.symbol}: could not compute session change` }
+  const spark: number[] = []
+  for (const close of input.closes ?? []) {
+    if (typeof close === "number" && Number.isFinite(close)) spark.push(round2(close))
+  }
   return {
     symbol: input.symbol,
     label: input.label,
     price: round2(price),
     priorClose: round2(prior),
     changePct: round2(changePct),
+    spark: spark.slice(-8),
   }
 }
 

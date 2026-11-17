@@ -96,8 +96,24 @@ function keyPartial(env: WorkerEnv) {
 }
 
 async function persist(env: WorkerEnv, parts: Parameters<typeof assembleSnapshot>[0]): Promise<Snapshot> {
-  const previous = (await readSnapshot(env))?.sources ?? []
-  const snapshot = assembleSnapshot(parts, previous, new Date().toISOString(), env.SOURCE_REPO_URL || "")
+  const stored = await readSnapshot(env)
+  const snapshot = assembleSnapshot(
+    parts,
+    stored?.sources ?? [],
+    new Date().toISOString(),
+    env.SOURCE_REPO_URL || "",
+    stored
+      ? {
+          generatedAt: stored.generatedAt,
+          markerCount: stored.markers?.length ?? 0,
+          markets: (stored.markets ?? []).map((market) => ({
+            symbol: market.symbol,
+            label: market.label,
+            price: market.price,
+          })),
+        }
+      : null,
+  )
   await env.SNAPSHOTS.put(SNAPSHOT_KEY, JSON.stringify(snapshot))
   return snapshot
 }

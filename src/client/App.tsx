@@ -1,13 +1,43 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react"
 import type { Snapshot } from "../logic/assemble"
-import { cardId, REGION_IDS, REGION_LABELS, type RegionId } from "../logic/regions"
+import { yahooQuoteUrl } from "../logic/links"
 import { formatChange } from "../logic/markets"
+import type { Marker } from "../logic/markers"
+import { cardId, REGION_IDS, REGION_LABELS, type RegionId } from "../logic/regions"
 import { FlatMap } from "./FlatMap"
+import type { MapFocus } from "./GlobePanel"
+import {
+  DeltaPanel,
+  DetailCard,
+  Glossary,
+  headlineDetail,
+  LAYERS,
+  MacroPanel,
+  markerDetail,
+  markerLayer,
+  NuclearWatch,
+  SensorGrid,
+  signalDetail,
+  SpaceWatch,
+  WireList,
+  type DetailItem,
+} from "./panels"
 
 const GlobePanel = lazy(() => import("./GlobePanel").then((mod) => ({ default: mod.GlobePanel })))
 
 type Pending = { ready: false; message: string }
 type Payload = Snapshot | Pending
+type ViewId = "board" | "sensors" | "nuclear" | "space" | "macro" | "delta" | "glossary"
+
+const VIEWS: { id: ViewId; label: string }[] = [
+  { id: "board", label: "Board" },
+  { id: "sensors", label: "Sensors" },
+  { id: "nuclear", label: "Nuclear" },
+  { id: "space", label: "Space" },
+  { id: "macro", label: "Macro" },
+  { id: "delta", label: "Delta" },
+  { id: "glossary", label: "Glossary" },
+]
 
 const STATUS_TEXT = {
   ok: "OK",
@@ -24,12 +54,23 @@ export function App() {
   const [globePaused, setGlobePaused] = useState(false)
   const [tickerPaused, setTickerPaused] = useState(false)
   const [panel, setPanel] = useState<"sources" | "signals" | null>(null)
+  const [view, setView] = useState<ViewId>("board")
   const [dismissed, setDismissed] = useState<string[]>([])
+  const [layers, setLayers] = useState<string[]>(() => LAYERS.map((layer) => layer.id))
+  const [visuals, setVisuals] = useState<"full" | "lite">("full")
+  const [detail, setDetail] = useState<DetailItem | null>(null)
+  const [focus, setFocus] = useState<MapFocus | null>(null)
+
+  useEffect(() => {
+    const stored = window.localStorage.getItem("worldmeter-visuals")
+    if (stored === "lite" || stored === "full") setVisuals(stored)
+    else if (window.matchMedia("(max-width: 700px)").matches) setVisuals("lite")
+  }, [])
 
   useEffect(() => {
     const wide = window.matchMedia("(min-width: 960px)").matches
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    if (wide && !reduce) {
+    if (wide && !reduce && window.localStorage.getItem("worldmeter-visuals") !== "lite") {
       const id = window.setTimeout(() => setMode("globe"), 600)
       return () => window.clearTimeout(id)
     }
@@ -60,20 +101,25 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (!panel) return
+    if (!panel && !detail) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPanel(null)
+      if (event.key === "Escape") {
+        setPanel(null)
+        setDetail(null)
+      }
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [panel])
+  }, [panel, detail])
 
   const snapshot = data && data.ready ? data : null
   const markers = useMemo(() => {
     if (!snapshot) return []
-    if (region === "world") return snapshot.markers
-    return snapshot.markers.filter((marker) => marker.region === region)
-  }, [snapshot, region])
+    return snapshot.markers.filter((marker) => {
+      if (region !== "world" && marker.region !== region) return false
+      return layers.includes(markerLayer(marker.kind))
+    })
+  }, [snapshot, region, layers])
 
   const counts = useMemo(() => {
     const tally: Record<string, number> = {}
@@ -88,8 +134,20 @@ export function App() {
     (signal) => (signal.tier === "FLASH" || signal.tier === "PRIORITY") && !dismissed.includes(signal.id),
   ).slice(0, 3)
 
+  function openMarker(marker: Marker) {
+    setDetail(markerDetail(marker))
+    setFocus({ lat: marker.lat, lon: marker.lon, token: Date.now() })
+    setView("board")
+  }
+
+  function setVisualMode(next: "full" | "lite") {
+    setVisuals(next)
+    window.localStorage.setItem("worldmeter-visuals", next)
+    if (next === "lite") setMode("flat")
+  }
+
   return (
-    <div className="shell">
+    <div className={visuals === "lite" ? "shell lite" : "shell"}>
       <a className="skip" href="#board">Skip to the board</a>
       <header className="top">
         <div className="brand">
@@ -114,6 +172,10 @@ export function App() {
             <button className="btn" aria-pressed={mode === "flat"} onClick={() => setMode("flat")}>Flat map</button>
             <button className="btn" aria-pressed={mode === "globe"} onClick={() => setMode("globe")}>3D globe</button>
           </div>
+          <div role="group" aria-label="Motion">
+            <button className="btn" aria-pressed={visuals === "full"} onClick={() => setVisualMode("full")}>Full</button>
+            <button className="btn" aria-pressed={visuals === "lite"} onClick={() => setVisualMode("lite")}>Lite</button>
+          </div>
           <button className="btn primary" aria-expanded={panel === "sources"} onClick={() => setPanel(panel === "sources" ? null : "sources")}>Sources</button>
           <button className="btn primary" aria-expanded={panel === "signals"} onClick={() => setPanel(panel === "signals" ? null : "signals")}>Signals</button>
         </div>
@@ -122,11 +184,16 @@ export function App() {
       <div className="ticker-wrap">
         <div className="ticker" role="region" aria-label="News headlines">
           {snapshot && snapshot.headlines.length > 0 ? (
-            <div className={tickerPaused ? "ticker-track paused" : "ticker-track"}>
+            <div className={tickerPaused || visuals === "lite" ? "ticker-track paused" : "ticker-track"}>
               {[...snapshot.headlines, ...snapshot.headlines].map((item, index) => (
-                <a key={`${item.title}-${index}`} className="ticker-item" href={item.url}>
+                <button
+                  key={`${item.url}-${index}`}
+                  type="button"
+                  className="ticker-item"
+                  onClick={() => snapshot && setDetail(headlineDetail(item))}
+                >
                   <strong>{item.source}</strong> {item.title}
-                </a>
+                </button>
               ))}
             </div>
           ) : (
@@ -142,6 +209,14 @@ export function App() {
           {tickerPaused ? "Resume" : "Pause"}
         </button>
       </div>
+
+      <nav className="views" aria-label="Board views">
+        {VIEWS.map((item) => (
+          <button key={item.id} type="button" className="btn" aria-pressed={view === item.id} onClick={() => setView(item.id)}>
+            {item.label}
+          </button>
+        ))}
+      </nav>
 
       {error && (
         <div className="banner error" role="alert">
@@ -161,87 +236,195 @@ export function App() {
                 <span className="tier">{toast.tier}</span>
                 <button className="btn" aria-label={`Dismiss alert: ${toast.title}`} onClick={() => setDismissed((current) => [...current, toast.id])}>Dismiss</button>
               </header>
-              <p><strong>{toast.title}</strong></p>
-              <p>{toast.detail}</p>
+              <button type="button" className="row-btn" onClick={() => {
+                setDetail(signalDetail(toast))
+                if (toast.lat != null && toast.lon != null) {
+                  setFocus({ lat: toast.lat, lon: toast.lon, token: Date.now() })
+                  setView("board")
+                }
+              }}>
+                <strong>{toast.title}</strong>
+                <span>{toast.detail}</span>
+              </button>
             </article>
           ))}
         </div>
       )}
 
-      <main id="board" className="layout">
-        <section className="panel" aria-labelledby="gauges-heading">
-          <h2 id="gauges-heading">Risk gauges</h2>
-          {(snapshot?.gauges ?? []).map((gauge) => (
-            <article key={gauge.id} id={cardId(gauge.id)} className="gauge" aria-labelledby={`${gauge.id}-label`}>
-              <header>
-                <h3 id={`${gauge.id}-label`}>{gauge.label}</h3>
-                <span>{gauge.valueLabel}</span>
-              </header>
-              <div className="bar" aria-hidden="true">
-                <i style={{ width: `${gauge.score ?? 0}%` }} />
-              </div>
-              <p className="formula">{gauge.formula}</p>
-            </article>
-          ))}
-          {!snapshot && <p className="meta">Gauges appear after the sweep returns a VIX level, the Treasury spread, GSCPI, high-yield OAS, and the USGS count.</p>}
-        </section>
-
-        <section className="stage" aria-label="Map">
-          <div className="map-frame">
-            {mode === "globe" ? (
-              <Suspense fallback={<p className="meta" style={{ padding: "1rem" }}>Loading the globe…</p>}>
-                <GlobePanel markers={markers} region={region} paused={globePaused} />
-              </Suspense>
-            ) : (
-              <FlatMap markers={markers} />
-            )}
-          </div>
-          <div className="legend">
-            <span>{markers.length} markers in view</span>
-            <span>Amber marks priority, blue marks the rest</span>
-            {mode === "globe" && (
-              <button className="btn" aria-pressed={globePaused} aria-label={globePaused ? "Resume globe rotation" : "Pause globe rotation"} onClick={() => setGlobePaused((value) => !value)}>
-                {globePaused ? "Resume rotation" : "Pause rotation"}
-              </button>
-            )}
-          </div>
-          <ul className="sr">
-            {markers.slice(0, 40).map((marker) => (
-              <li key={marker.id}>{marker.region}: {marker.title}. {marker.detail}</li>
+      {view === "board" && (
+        <main id="board" className="layout">
+          <section className="panel" aria-labelledby="gauges-heading">
+            <h2 id="gauges-heading">Risk gauges</h2>
+            {(snapshot?.gauges ?? []).map((gauge) => (
+              <article key={gauge.id} id={cardId(gauge.id)} className="gauge" aria-labelledby={`${gauge.id}-label`}>
+                <header>
+                  <h3 id={`${gauge.id}-label`}>{gauge.label}</h3>
+                  <span>{gauge.valueLabel}</span>
+                </header>
+                <div className="bar" aria-hidden="true">
+                  <i style={{ width: `${gauge.score ?? 0}%` }} />
+                </div>
+                <p className="formula">{gauge.formula}</p>
+              </article>
             ))}
-          </ul>
-          {snapshot && (
-            <p className="meta" id={cardId("eonet")}>{snapshot.eonetLabel}</p>
-          )}
-        </section>
+            {!snapshot && <p className="meta">Gauges appear after the sweep returns a VIX level, the Treasury spread, GSCPI, high-yield OAS, and the USGS count.</p>}
+            {snapshot?.delta && <p className="meta">{snapshot.delta.headline}</p>}
+          </section>
 
-        <aside className="panel" aria-labelledby="markets-heading">
-          <h2 id="markets-heading">Markets</h2>
-          <p className="meta">Change versus the prior session close.</p>
-          {(snapshot?.markets ?? []).map((quote) => (
-            <div key={quote.symbol} id={cardId(quote.symbol.replace(/[^a-z0-9]+/gi, "").toLowerCase())} className="market">
-              <div>
-                <strong>{quote.label}</strong>
-                <div className="meta">{quote.price.toLocaleString("en-US")}</div>
-              </div>
-              <div className={quote.changePct > 0.05 ? "up" : quote.changePct < -0.05 ? "down" : "flat"}>
-                {formatChange(quote.changePct)}
-              </div>
+          <section className="stage" aria-label="Map">
+            <div className="map-frame">
+              {mode === "globe" ? (
+                <Suspense fallback={<p className="meta" style={{ padding: "1rem" }}>Loading the globe…</p>}>
+                  <GlobePanel
+                    markers={markers}
+                    region={region}
+                    paused={globePaused || visuals === "lite"}
+                    focus={focus}
+                    onPick={openMarker}
+                  />
+                </Suspense>
+              ) : (
+                <FlatMap markers={markers} focus={focus} onPick={openMarker} />
+              )}
             </div>
-          ))}
-          <div className="stats">
-            {snapshot?.debt && (
-              <p className="stat" id={cardId("public-debt")}><strong>${snapshot.debt.trillions.toFixed(2)}T</strong> US public debt, {snapshot.debt.asOf}</p>
-            )}
-            {snapshot?.unemployment && (
-              <p className="stat" id={cardId("unemployment")}><strong>{snapshot.unemployment.rate.toFixed(1)}%</strong> US unemployment, {snapshot.unemployment.asOf}</p>
-            )}
-            {snapshot && snapshot.fx.length > 0 && (
-              <p className="stat" id={cardId("fx")}>{snapshot.fx.map((rate) => `${rate.pair} ${rate.rate.toFixed(2)}`).join(" · ")}</p>
-            )}
-          </div>
-        </aside>
-      </main>
+            <p className="meta map-hint">
+              {mode === "globe"
+                ? "Drag to rotate. Scroll or pinch to zoom. Rotation pauses while you interact."
+                : "Drag to pan. Scroll or pinch to zoom. Land is the equirectangular map; markers use longitude and latitude."}
+            </p>
+            <div className="legend" role="group" aria-label="Map layers">
+              {LAYERS.map((layer) => (
+                <button
+                  key={layer.id}
+                  type="button"
+                  className="btn layer"
+                  aria-pressed={layers.includes(layer.id)}
+                  onClick={() => setLayers((current) => current.includes(layer.id) ? current.filter((id) => id !== layer.id) : [...current, layer.id])}
+                >
+                  <i style={{ background: layer.color }} />
+                  {layer.label}
+                </button>
+              ))}
+            </div>
+            <div className="legend">
+              <span>{markers.length} markers in view</span>
+              {mode === "globe" && (
+                <button className="btn" aria-pressed={globePaused} aria-label={globePaused ? "Resume globe rotation" : "Pause globe rotation"} onClick={() => setGlobePaused((value) => !value)}>
+                  {globePaused ? "Resume rotation" : "Pause rotation"}
+                </button>
+              )}
+            </div>
+            <ul className="sr">
+              {markers.slice(0, 40).map((marker) => (
+                <li key={marker.id}>
+                  <button type="button" onClick={() => openMarker(marker)}>{marker.region}: {marker.title}. {marker.detail}</button>
+                </li>
+              ))}
+            </ul>
+            {snapshot && <p className="meta" id={cardId("eonet")}>{snapshot.eonetLabel}</p>}
+            {detail && snapshot && <DetailCard item={detail} sweepAt={snapshot.generatedAt} onClose={() => setDetail(null)} />}
+          </section>
+
+          <aside className="panel" aria-labelledby="markets-heading">
+            <h2 id="markets-heading">Markets</h2>
+            <p className="meta">Change versus the prior session close.</p>
+            {(snapshot?.markets ?? []).map((quote) => (
+              <button
+                key={quote.symbol}
+                type="button"
+                id={cardId(quote.symbol.replace(/[^a-z0-9]+/gi, "").toLowerCase())}
+                className="market row-btn"
+                onClick={() => snapshot && setDetail({
+                  id: quote.symbol,
+                  title: quote.label,
+                  kind: "Market",
+                  detail: `Last ${quote.price.toLocaleString("en-US")} against prior session close ${quote.priorClose.toLocaleString("en-US")}.`,
+                  url: yahooQuoteUrl(quote.symbol),
+                  lat: null,
+                  lon: null,
+                  observedAt: null,
+                  figures: formatChange(quote.changePct),
+                  severity: null,
+                })}
+              >
+                <div>
+                  <strong>{quote.label}</strong>
+                  <div className="meta">{quote.price.toLocaleString("en-US")}</div>
+                </div>
+                <div className={quote.changePct > 0.05 ? "up" : quote.changePct < -0.05 ? "down" : "flat"}>
+                  {formatChange(quote.changePct)}
+                </div>
+              </button>
+            ))}
+            <div className="stats">
+              {snapshot?.debt && (
+                <p className="stat" id={cardId("public-debt")}><strong>${snapshot.debt.trillions.toFixed(2)}T</strong> US public debt, {snapshot.debt.asOf}</p>
+              )}
+              {snapshot?.unemployment && (
+                <p className="stat" id={cardId("unemployment")}><strong>{snapshot.unemployment.rate.toFixed(1)}%</strong> US unemployment, {snapshot.unemployment.asOf}</p>
+              )}
+              {snapshot && snapshot.fx.length > 0 && (
+                <p className="stat" id={cardId("fx")}>{snapshot.fx.map((rate) => `${rate.pair} ${rate.rate.toFixed(2)}`).join(" · ")}</p>
+              )}
+            </div>
+            {snapshot && <WireList snapshot={snapshot} onOpen={(item) => setDetail(headlineDetail(item))} />}
+          </aside>
+        </main>
+      )}
+
+      {snapshot && view !== "board" && (
+        <main id="board" className="view-wrap">
+          {view === "sensors" && <SensorGrid snapshot={snapshot} onOpen={openMarker} />}
+          {view === "nuclear" && <NuclearWatch snapshot={snapshot} onOpen={openMarker} />}
+          {view === "space" && <SpaceWatch snapshot={snapshot} onOpen={openMarker} />}
+          {view === "macro" && (
+            <MacroPanel
+              snapshot={snapshot}
+              onQuote={(symbol) => {
+                const quote = snapshot.markets.find((item) => item.symbol === symbol)
+                if (!quote) return
+                setDetail({
+                  id: quote.symbol,
+                  title: quote.label,
+                  kind: "Market",
+                  detail: `Last ${quote.price.toLocaleString("en-US")} against prior session close ${quote.priorClose.toLocaleString("en-US")}.`,
+                  url: yahooQuoteUrl(quote.symbol),
+                  lat: null,
+                  lon: null,
+                  observedAt: null,
+                  figures: formatChange(quote.changePct),
+                  severity: null,
+                })
+              }}
+              onMacro={(id) => {
+                const figure = snapshot.macro.find((item) => item.id === id)
+                if (!figure) return
+                setDetail({
+                  id: figure.id,
+                  title: figure.label,
+                  kind: "Macro",
+                  detail: `Latest public FRED observation, ${figure.asOf}.`,
+                  url: figure.url,
+                  lat: null,
+                  lon: null,
+                  observedAt: figure.asOf,
+                  figures: figure.value,
+                  severity: null,
+                })
+              }}
+            />
+          )}
+          {view === "delta" && <DeltaPanel snapshot={snapshot} />}
+          {view === "glossary" && <Glossary />}
+          {detail && <DetailCard item={detail} sweepAt={snapshot.generatedAt} onClose={() => setDetail(null)} />}
+        </main>
+      )}
+
+      {!snapshot && view !== "board" && (
+        <main id="board" className="view-wrap">
+          <p className="banner">This view fills in when the sweep returns.</p>
+        </main>
+      )}
 
       <footer className="foot" id="source">
         <p>
@@ -282,10 +465,17 @@ export function App() {
               <p>No cross-checks fired on this sweep.</p>
             ) : (
               snapshot.signals.map((signal) => (
-                <article key={signal.id} className="signal">
-                  <h3>{signal.tier === "INFO" ? "Note" : signal.tier}. {signal.title}</h3>
-                  <p className="meta">{signal.detail}</p>
-                </article>
+                <button key={signal.id} type="button" className="signal row-btn" onClick={() => {
+                  setDetail(signalDetail(signal))
+                  setPanel(null)
+                  if (signal.lat != null && signal.lon != null) {
+                    setFocus({ lat: signal.lat, lon: signal.lon, token: Date.now() })
+                    setView("board")
+                  }
+                }}>
+                  <strong>{signal.tier === "INFO" ? "Note" : signal.tier}. {signal.title}</strong>
+                  <span className="meta">{signal.detail}</span>
+                </button>
               ))
             )}
           </div>

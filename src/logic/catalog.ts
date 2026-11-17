@@ -19,6 +19,7 @@ export const CATALOG: readonly CatalogSource[] = [
   { id: "treasury-debt", label: "US Treasury debt", tier: "Markets", description: "Debt to the penny from the Treasury Fiscal Data API.", env: null },
   { id: "fred-yield-csv", label: "FRED 10Y–2Y CSV", tier: "Markets", description: "Public FRED graph CSV for T10Y2Y. No API key.", env: null },
   { id: "fred-hy-csv", label: "FRED HY OAS CSV", tier: "Markets", description: "Public FRED graph CSV for BAMLH0A0HYM2 (ICE BofA US high-yield OAS). No API key.", env: null },
+  { id: "fred-macro", label: "FRED macro CSVs", tier: "Markets", description: "Public FRED graph CSVs for the broad dollar, initial claims, the 30-year mortgage rate, and M2. No API key.", env: null },
   { id: "gscpi", label: "NY Fed GSCPI", tier: "Markets", description: "Global Supply Chain Pressure Index, latest vintage from the NY Fed CSV.", env: null },
   { id: "bls", label: "BLS unemployment", tier: "Markets", description: "US unemployment rate, series LNS14000000, public BLS API v1.", env: null },
   { id: "open-meteo", label: "Open-Meteo", tier: "Environment", description: "Current conditions for eight cities, including Lagos, Nairobi, Johannesburg, and Cairo.", env: null },
@@ -37,7 +38,7 @@ export const CATALOG: readonly CatalogSource[] = [
   { id: "acled", label: "ACLED", tier: "Conflict", description: "Armed conflict events via ACLED OAuth (email and password).", env: ["ACLED_EMAIL", "ACLED_PASSWORD"] },
   { id: "fred-api", label: "FRED API", tier: "Markets", description: "Optional Federal Reserve series (fed funds, CPI) via the FRED API. Yield-curve and HY gauges use the public CSVs and do not depend on this key.", env: ["FRED_API_KEY"] },
   { id: "eia", label: "EIA", tier: "Markets", description: "Optional US Energy Information Administration WTI spot price.", env: ["EIA_API_KEY"] },
-  { id: "firms", label: "NASA FIRMS", tier: "Hazards", description: "Optional VIIRS thermal detections for a few small boxes, including Nigeria.", env: ["FIRMS_MAP_KEY"] },
+  { id: "firms", label: "NASA FIRMS", tier: "Hazards", description: "Optional thermal detections for Nigeria and southern California. NOAA-20 is read first; NOAA-21, then MODIS, is used when that feed is empty or errors. The detail names the satellite that returned rows.", env: ["FIRMS_MAP_KEY"] },
   { id: "reddit", label: "Reddit", tier: "Social", description: "Optional r/worldnews hot posts. Requires a Reddit script app.", env: ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET"] },
 ]
 

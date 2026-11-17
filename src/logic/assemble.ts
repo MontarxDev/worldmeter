@@ -1,8 +1,9 @@
 import type { PagerLevel, RadiationSample } from "./alerts"
+import { CHOKEPOINTS } from "./chokepoints"
 import { buildGauges } from "./gauges"
 import type { MarketQuote } from "./markets"
 import type { Marker } from "./markers"
-import { capMarkers } from "./markers"
+import { capMarkers, placeMarker } from "./markers"
 import { eonetSummary } from "./parse"
 import { buildSignals, type GdacsFact, type QuakeFact, type Signal } from "./signals"
 import { CATALOG } from "./catalog"
@@ -16,11 +17,33 @@ export type Headline = {
   publishedAt: string | null
 }
 
+export type MacroFigure = {
+  id: string
+  label: string
+  value: string
+  asOf: string
+  url: string
+}
+
+export type SweepDelta = {
+  comparedTo: string | null
+  markerDelta: number
+  marketMoves: { label: string; from: number; to: number; pct: number }[]
+  headline: string
+}
+
+export type PriorBoard = {
+  generatedAt: string
+  markerCount: number
+  markets: { symbol: string; label: string; price: number }[]
+}
+
 export type SweepPartial = {
   attempts: SourceAttempt[]
   markers: Marker[]
   headlines: Headline[]
   markets: MarketQuote[]
+  macro: MacroFigure[]
   quakes: QuakeFact[]
   gdacs: GdacsFact[]
   radiation: RadiationSample[]
@@ -43,8 +66,10 @@ export type Snapshot = {
   markers: Marker[]
   headlines: Headline[]
   markets: MarketQuote[]
+  macro: MacroFigure[]
   gauges: ReturnType<typeof buildGauges>
   signals: Signal[]
+  delta: SweepDelta
   eonetLabel: string
   debt: { asOf: string; trillions: number } | null
   unemployment: { asOf: string; rate: number } | null
@@ -57,6 +82,7 @@ export function emptyPartial(): SweepPartial {
     markers: [],
     headlines: [],
     markets: [],
+    macro: [],
     quakes: [],
     gdacs: [],
     radiation: [],
@@ -78,6 +104,7 @@ export function mergePartials(parts: readonly SweepPartial[]): SweepPartial {
     merged.markers.push(...part.markers)
     merged.headlines.push(...part.headlines)
     merged.markets.push(...part.markets)
+    merged.macro.push(...(part.macro ?? []))
     merged.quakes.push(...part.quakes)
     merged.gdacs.push(...part.gdacs)
     merged.radiation.push(...part.radiation)
@@ -93,11 +120,61 @@ export function mergePartials(parts: readonly SweepPartial[]): SweepPartial {
   return merged
 }
 
+export function describeSweepDelta(
+  markerCount: number,
+  markets: readonly MarketQuote[],
+  prior: PriorBoard | null,
+): SweepDelta {
+  if (!prior) {
+    return {
+      comparedTo: null,
+      markerDelta: 0,
+      marketMoves: [],
+      headline: "No earlier sweep is stored yet. The next pass compares prices and the marker count.",
+    }
+  }
+  const marketMoves = markets.flatMap((quote) => {
+    const before = prior.markets.find((item) => item.symbol === quote.symbol)
+    if (!before || !Number.isFinite(before.price) || before.price === 0) return []
+    const pct = Math.round((((quote.price - before.price) / before.price) * 100) * 100) / 100
+    return [{ label: quote.label, from: before.price, to: quote.price, pct }]
+  }).sort((a, b) => Math.abs(b.pct) - Math.abs(a.pct)).slice(0, 4)
+  const markerDelta = markerCount - prior.markerCount
+  const when = prior.generatedAt.slice(11, 16)
+  const markerText = markerDelta === 0 ? "marker count held" : `markers ${markerDelta > 0 ? "+" : ""}${markerDelta}`
+  const moveText = marketMoves.length
+    ? marketMoves.map((move) => `${move.label} ${move.pct > 0 ? "+" : ""}${move.pct.toFixed(2)}% versus the last stored price`).join("; ")
+    : "no market price to compare"
+  return {
+    comparedTo: prior.generatedAt,
+    markerDelta,
+    marketMoves,
+    headline: `Since ${when} UTC: ${markerText}. ${moveText}.`,
+  }
+}
+
+const CHOKEPOINT_URL = "https://www.eia.gov/international/analysis/special-topics/World_Oil_Transit_Chokepoints"
+
+function chokepointMarkers(): Marker[] {
+  return CHOKEPOINTS.map((point) => placeMarker({
+    id: `choke-${point.id}`,
+    sourceId: "chokepoint",
+    kind: "Chokepoint",
+    title: point.name,
+    detail: "Fixed oil-transit strait. This is a map reference, not a live vessel count.",
+    lat: point.lat,
+    lon: point.lon,
+    severity: "info",
+    url: CHOKEPOINT_URL,
+  }))
+}
+
 export function assembleSnapshot(
   parts: readonly SweepPartial[],
   previous: readonly SourceStatus[],
   generatedAt: string,
   sourceRepoUrl: string,
+  prior: PriorBoard | null = null,
 ): Snapshot {
   const merged = mergePartials(parts)
   const usgs = merged.attempts.find((attempt) => attempt.id === "usgs")
@@ -127,17 +204,21 @@ export function assembleSnapshot(
     return true
   }).slice(0, 40)
 
+  const straits = chokepointMarkers()
+  const markers = [...straits, ...capMarkers(merged.markers, 160 - straits.length)]
   return {
     ready: true,
     generatedAt,
     sweepMinutes: SWEEP_MINUTES,
     sourceRepoUrl,
     sources: mergeSourceStatuses(CATALOG, merged.attempts, previous),
-    markers: capMarkers(merged.markers, 160),
+    markers,
     headlines,
     markets: merged.markets,
+    macro: merged.macro,
     gauges,
     signals,
+    delta: describeSweepDelta(markers.length, merged.markets, prior),
     eonetLabel,
     debt: merged.debt,
     unemployment: merged.unemployment,

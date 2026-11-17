@@ -18,6 +18,15 @@ export const REGION_LABELS: Record<RegionId, string> = {
   "asia-pacific": "Asia Pacific",
 }
 
+/** A point inside each region. The globe faces it with the same math as the markers. */
+export const REGION_FOCUS: Record<Exclude<RegionId, "world">, { lat: number; lon: number }> = {
+  americas: { lat: 39, lon: -98 },
+  europe: { lat: 50, lon: 10 },
+  "middle-east": { lat: 28, lon: 45 },
+  africa: { lat: 2, lon: 18 },
+  "asia-pacific": { lat: 15, lon: 115 },
+}
+
 /** Globe rotation (radians) that brings a region toward the camera. */
 export const REGION_PHI: Record<RegionId, number> = {
   world: 0.4,

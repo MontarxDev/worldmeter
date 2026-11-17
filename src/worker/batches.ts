@@ -2,7 +2,8 @@ import type { RadiationSample } from "../logic/alerts"
 import { emptyPartial, isPager, type SweepPartial } from "../logic/assemble"
 import { MARKET_SYMBOLS, quoteFromChart } from "../logic/markets"
 import { placeMarker } from "../logic/markers"
-import { FIRMS_BOXES } from "../logic/firms"
+import { FIRMS_BOXES, FIRMS_SOURCES, chooseFirmsSource, firmsSatelliteLabel, parseFirmsPoints, type FirmsAttempt, type FirmsSource } from "../logic/firms"
+import { adsbUrl, firmsMapUrl, fredSeriesUrl, gdacsEventUrl, nwsAlertUrl, usgsEventUrl } from "../logic/links"
 import { lastFredObservation, latestGscpi, parseKevHead, parseOfacHeader, parseRadnetTail, parseRssItems } from "../logic/parse"
 import type { SourceAttempt } from "../logic/status"
 import { failureMessage, fetchCapped, fetchTail, present, readJson, USER_AGENT } from "./http"
@@ -78,6 +79,7 @@ function join(parts: SweepPartial[]): SweepPartial {
     merged.markers.push(...part.markers)
     merged.headlines.push(...part.headlines)
     merged.markets.push(...part.markets)
+    merged.macro.push(...(part.macro ?? []))
     merged.quakes.push(...part.quakes)
     merged.gdacs.push(...part.gdacs)
     merged.radiation.push(...part.radiation)
@@ -119,7 +121,7 @@ export async function batchMarkets(): Promise<SweepPartial> {
 }
 
 export async function batchRates(): Promise<SweepPartial> {
-  return join(await Promise.all([frankfurter(), treasuryDebt(), bls(), fredHy()]))
+  return join(await Promise.all([frankfurter(), treasuryDebt(), bls(), fredHy(), fredMacro()]))
 }
 
 export async function batchCurve(): Promise<SweepPartial> {
@@ -205,7 +207,9 @@ async function usgs(): Promise<SweepPartial> {
       const tsunami = feature.properties?.tsunami === 1
       const place = feature.properties?.place || "Earthquake"
       const id = feature.properties?.code || feature.id || `${lat},${lon}`
-      partial.quakes.push({ id, mag, place, pager, tsunami, lat, lon })
+      const url = usgsEventUrl(feature.properties?.code, feature.properties?.url)
+      const observedAt = feature.properties?.time ? new Date(feature.properties.time).toISOString() : null
+      partial.quakes.push({ id, mag, place, pager, tsunami, lat, lon, url, observedAt })
       partial.markers.push(placeMarker({
         id: `usgs-${id}`,
         sourceId: "usgs",
@@ -215,6 +219,9 @@ async function usgs(): Promise<SweepPartial> {
         lat,
         lon,
         severity: pager === "red" ? "flash" : pager === "orange" || pager === "yellow" ? "priority" : "info",
+        url,
+        observedAt,
+        figures: `M${mag.toFixed(1)}`,
       }))
     }
     return { itemCount: features.length, detail: `${features.length} events of M4.5+ in 24 hours` }
@@ -240,6 +247,8 @@ async function eonet(): Promise<SweepPartial> {
         lat,
         lon,
         severity: "info",
+        url: event.sources?.find((source) => source.url)?.url || `https://eonet.gsfc.nasa.gov/api/v3/events/${encodeURIComponent(event.id)}`,
+        observedAt: point.date ?? null,
       }))
     }
     return { itemCount: events.length, detail: `${events.length} events in the last 30 days` }
@@ -260,6 +269,7 @@ async function gdacs(): Promise<SweepPartial> {
       const [lon, lat] = coords
       const props = feature.properties ?? {}
       const alert = String(props.alertlevel || "Green")
+      const eventUrl = gdacsEventUrl(props.eventtype, props.eventid)
       partial.gdacs.push({
         id: String(props.eventid ?? `${lat},${lon}`),
         name: props.name || props.eventname || "GDACS event",
@@ -267,6 +277,7 @@ async function gdacs(): Promise<SweepPartial> {
         alert,
         lat,
         lon,
+        url: eventUrl,
       })
       partial.markers.push(placeMarker({
         id: `gdacs-${props.eventtype}-${props.eventid}`,
@@ -277,6 +288,8 @@ async function gdacs(): Promise<SweepPartial> {
         lat,
         lon,
         severity: alert.toLowerCase() === "red" ? "priority" : "info",
+        url: eventUrl,
+        figures: alert,
       }))
     }
     return { itemCount: features.length, detail: `${features.length} current GDACS events` }
@@ -304,6 +317,9 @@ async function nws(): Promise<SweepPartial> {
         lat: point.lat,
         lon: point.lon,
         severity: "priority",
+        url: nwsAlertUrl(feature.properties?.id),
+        observedAt: feature.properties?.sent ?? null,
+        figures: feature.properties?.severity || "Extreme",
       }))
     }
     const total = countBody.total ?? extreme.features?.length ?? 0
@@ -426,6 +442,37 @@ async function fredHy(): Promise<SweepPartial> {
   })
 }
 
+async function fredMacro(): Promise<SweepPartial> {
+  return source("fred-macro", async (partial) => {
+    const series = [
+      { id: "DTWEXBGS", label: "Broad dollar index", format: (value: number) => value.toFixed(2) },
+      { id: "ICSA", label: "Initial jobless claims", format: (value: number) => Math.round(value).toLocaleString("en-US") },
+      { id: "MORTGAGE30US", label: "30-year mortgage", format: (value: number) => `${value.toFixed(2)}%` },
+      { id: "M2SL", label: "M2 money stock", format: (value: number) => `$${value.toFixed(0)}B` },
+    ]
+    const rows = await Promise.all(series.map(async (item) => {
+      const response = await fetchCapped(
+        `https://fred.stlouisfed.org/graph/fredgraph.csv?id=${item.id}&cosd=2024-01-01`,
+        { maxBytes: 40_000, timeoutMs: 12_000 },
+      )
+      if (!response.ok) return null
+      const observation = lastFredObservation(response.text)
+      if (!observation) return null
+      return {
+        id: item.id,
+        label: item.label,
+        value: item.format(observation.value),
+        asOf: observation.date,
+        url: fredSeriesUrl(item.id),
+      }
+    }))
+    const kept = rows.filter((row): row is NonNullable<typeof row> => row != null)
+    partial.macro.push(...kept)
+    if (kept.length === 0) throw new Error("No FRED macro observations")
+    return { itemCount: kept.length, detail: kept.map((row) => `${row.label} ${row.value}`).join("; ") }
+  })
+}
+
 async function gscpi(): Promise<SweepPartial> {
   return source("gscpi", async (partial) => {
     const response = await fetchCapped(
@@ -475,6 +522,8 @@ async function openMeteo(): Promise<SweepPartial> {
         lat: city.lat,
         lon: city.lon,
         severity: code >= 95 ? "priority" : "info",
+        url: `https://open-meteo.com/en/docs?latitude=${city.lat}&longitude=${city.lon}`,
+        figures: `${Math.round(row.current.temperature_2m)}°C`,
       }))
     })
     return { itemCount: rows.length, detail: `${rows.length} city observations` }
@@ -505,6 +554,9 @@ async function iss(): Promise<SweepPartial> {
       lat: body.latitude,
       lon: body.longitude,
       severity: "info",
+      url: "https://wheretheiss.at/",
+      observedAt: new Date().toISOString(),
+      figures: `${Math.round(body.altitude ?? 0)} km`,
     }))
     return { itemCount: 1, detail: `${body.latitude.toFixed(1)}°, ${body.longitude.toFixed(1)}°` }
   })
@@ -597,6 +649,9 @@ async function safecast(): Promise<SweepPartial> {
         lat: site.lat,
         lon: site.lon,
         severity: "info",
+        url: `https://map.safecast.org/?lat=${site.lat}&lon=${site.lon}&z=8`,
+        observedAt: latest.captured_at ?? null,
+        figures: `${latest.value} ${unit}`,
       }))
     }
     return { itemCount: readings, detail: `${readings} samples at ${sites.length} sites` }
@@ -650,6 +705,9 @@ async function epa(): Promise<SweepPartial> {
         lat: item.station.lat,
         lon: item.station.lon,
         severity: item.reading.elevated ? "routine" : "info",
+        url: "https://www.epa.gov/radnet/radnet-near-real-time-air-data",
+        observedAt: new Date(item.reading.observedAtMs).toISOString(),
+        figures: `${Math.round(item.reading.doseNsvPerHour)} nSv/h`,
       }))
     }
     const kept = settled.filter((item) => item.reading)
@@ -686,6 +744,7 @@ async function adsb(): Promise<SweepPartial> {
           lat: point.lat,
           lon: point.lon,
           severity: "info",
+          url: adsbUrl(point.hex),
         }))
       }
     }
@@ -757,6 +816,7 @@ async function reliefWeb(appname: string): Promise<SweepPartial> {
         lat: loc.lat,
         lon: loc.lon,
         severity: "info",
+        url: "https://reliefweb.int/disasters",
       }))
     }
     return { itemCount: rows.length, detail: `${rows.length} disasters from API v2` }
@@ -791,7 +851,7 @@ async function acled(email: string, password: string): Promise<SweepPartial> {
       `https://acleddata.com/api/acled/read?_format=json&event_date=${since}&event_date_where=%3E%3D&limit=20&fields=event_id_cnty|event_date|event_type|country|latitude|longitude|fatalities`,
       { headers: { authorization: `Bearer ${tokenBody.access_token}` }, maxBytes: 120_000, timeoutMs: 12_000 },
     )
-    const data = readJson<{ data?: { event_id_cnty?: string; event_type?: string; country?: string; latitude?: string; longitude?: string; fatalities?: string }[] }>(dataResponse.text, dataResponse.status)
+    const data = readJson<{ data?: { event_id_cnty?: string; event_date?: string; event_type?: string; country?: string; latitude?: string; longitude?: string; fatalities?: string }[] }>(dataResponse.text, dataResponse.status)
     const rows = data.data ?? []
     for (const row of rows) {
       const lat = Number(row.latitude)
@@ -806,6 +866,9 @@ async function acled(email: string, password: string): Promise<SweepPartial> {
         lat,
         lon,
         severity: Number(row.fatalities) > 0 ? "priority" : "info",
+        url: "https://acleddata.com/conflict-data/",
+        observedAt: row.event_date && !Number.isNaN(Date.parse(row.event_date)) ? new Date(row.event_date).toISOString() : null,
+        figures: row.fatalities ? `${row.fatalities} fatalities` : null,
       }))
     }
     return { itemCount: rows.length, detail: `${rows.length} events since ${since}` }
@@ -843,52 +906,72 @@ async function eia(key: string): Promise<SweepPartial> {
   })
 }
 
+const FIRMS_PLOT_LIMIT = 15
+
 async function firms(key: string): Promise<SweepPartial> {
   return source("firms", async (partial) => {
-    const settled = await Promise.all(FIRMS_BOXES.map(async (box) => {
-      try {
-        const response = await fetchCapped(
-          `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${encodeURIComponent(key)}/VIIRS_SNPP_NRT/${box}/1`,
-          { maxBytes: 48_000, timeoutMs: 12_000 },
-        )
-        if (!response.ok) throw new Error(`HTTP ${response.status} for ${box}`)
-        return { box, text: response.text, error: null as string | null }
-      } catch (error) {
-        return { box, text: "", error: failureMessage(error) }
-      }
-    }))
-    const failures = settled.filter((item) => item.error)
-    if (failures.length === settled.length) {
-      throw new Error(failures.map((item) => item.error).join("; "))
+    const settled = await Promise.all(FIRMS_BOXES.map((box) => firmsBox(key, box)))
+    const hits = settled.filter((item): item is FirmsBox & { source: FirmsSource } => item.source != null)
+    if (hits.length === 0) {
+      throw new Error(settled.map((item) => `${item.box}: ${item.error}`).join("; "))
     }
     let rows = 0
-    for (const item of settled) {
-      if (!item.text) continue
-      const lines = item.text.trim().split("\n")
-      const headers = lines[0]?.split(",") ?? []
-      const latIndex = headers.indexOf("latitude")
-      const lonIndex = headers.indexOf("longitude")
-      for (const line of lines.slice(1, 16)) {
-        const cols = line.split(",")
-        const lat = Number(cols[latIndex])
-        const lon = Number(cols[lonIndex])
-        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue
-        rows += 1
+    const labels: string[] = []
+    for (const item of hits) {
+      const satellite = firmsSatelliteLabel(item.source)
+      rows += item.points.length
+      labels.push(`${satellite} ${item.points.length} in ${item.box}`)
+      for (const point of item.points.slice(0, FIRMS_PLOT_LIMIT)) {
         partial.markers.push(placeMarker({
-          id: `firms-${lat}-${lon}`,
+          id: `firms-${item.source}-${point.lat}-${point.lon}`,
           sourceId: "firms",
           kind: "Fire",
-          title: "VIIRS thermal",
-          detail: "NASA FIRMS detection in the last day",
-          lat,
-          lon,
+          title: `${satellite} thermal`,
+          detail: `NASA FIRMS ${satellite} detection in the last day`,
+          lat: point.lat,
+          lon: point.lon,
           severity: "info",
+          url: firmsMapUrl(point.lat, point.lon),
+          observedAt: new Date().toISOString(),
+          figures: satellite,
         }))
       }
     }
-    const failed = failures.length ? `; failed ${failures.map((item) => item.box).join(", ")}` : ""
-    return { itemCount: rows, detail: `${rows} detections in ${settled.length - failures.length} of ${settled.length} boxes${failed}` }
+    const missed = settled.filter((item) => item.source == null)
+    const note = missed.length ? `; no detections for ${missed.map((item) => item.box).join(", ")}` : ""
+    return { itemCount: rows, detail: `${labels.join("; ")}${note}` }
   })
+}
+
+type FirmsBox = {
+  box: string
+  source: FirmsSource | null
+  points: { lat: number; lon: number }[]
+  error: string | null
+}
+
+async function firmsBox(key: string, box: string): Promise<FirmsBox> {
+  const attempts: FirmsAttempt[] = []
+  let lastError = "no detections"
+  for (const source of FIRMS_SOURCES) {
+    try {
+      const response = await fetchCapped(
+        `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${encodeURIComponent(key)}/${source}/${box}/1`,
+        { maxBytes: 48_000, timeoutMs: 12_000 },
+      )
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const points = parseFirmsPoints(response.text)
+      attempts.push({ source, ok: true, rows: points.length })
+      if (chooseFirmsSource(attempts) === source) {
+        return { box, source, points, error: null }
+      }
+      lastError = `${firmsSatelliteLabel(source)} returned no detections`
+    } catch (error) {
+      attempts.push({ source, ok: false, rows: 0 })
+      lastError = `${firmsSatelliteLabel(source)}: ${failureMessage(error)}`
+    }
+  }
+  return { box, source: null, points: [], error: lastError }
 }
 
 async function reddit(clientId: string, clientSecret: string): Promise<SweepPartial> {
@@ -986,13 +1069,14 @@ function weatherLabel(code: number): string {
 type UsgsFeature = {
   id?: string
   geometry?: { coordinates?: number[] }
-  properties?: { mag?: number; place?: string; alert?: string | null; tsunami?: number; code?: string }
+  properties?: { mag?: number; place?: string; alert?: string | null; tsunami?: number; code?: string; url?: string; time?: number }
 }
 type EonetEvent = {
   id: string
   title: string
   categories?: { title?: string }[]
-  geometry?: { type?: string; coordinates?: [number, number] }[]
+  sources?: { url?: string }[]
+  geometry?: { type?: string; coordinates?: [number, number]; date?: string }[]
 }
 type GdacsFeature = {
   geometry?: { coordinates?: [number, number] }
@@ -1000,7 +1084,7 @@ type GdacsFeature = {
 }
 type NwsFeature = {
   geometry?: { type?: string; coordinates?: unknown }
-  properties?: { id?: string; event?: string; headline?: string; areaDesc?: string }
+  properties?: { id?: string; event?: string; headline?: string; areaDesc?: string; sent?: string; severity?: string }
 }
 type YahooChart = {
   chart?: {

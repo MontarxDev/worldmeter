@@ -1,3 +1,4 @@
+import { resolveItemUrl } from "./links"
 import { regionOf, type RegionId } from "./regions"
 
 export type MarkerSeverity = "info" | "routine" | "priority" | "flash"
@@ -12,6 +13,10 @@ export type Marker = {
   lon: number
   region: Exclude<RegionId, "world">
   severity: MarkerSeverity
+  /** Original item page. Always an http(s) URL, falling back to the source homepage. */
+  url: string
+  observedAt: string | null
+  figures: string | null
 }
 
 const SEVERITY_RANK: Record<MarkerSeverity, number> = {
@@ -22,9 +27,19 @@ const SEVERITY_RANK: Record<MarkerSeverity, number> = {
 }
 
 export function placeMarker(
-  marker: Omit<Marker, "region">,
+  marker: Omit<Marker, "region" | "url" | "observedAt" | "figures"> & {
+    url?: string | null
+    observedAt?: string | null
+    figures?: string | null
+  },
 ): Marker {
-  return { ...marker, region: regionOf(marker.lat, marker.lon) }
+  return {
+    ...marker,
+    url: resolveItemUrl(marker.sourceId, marker.url),
+    observedAt: marker.observedAt ?? null,
+    figures: marker.figures ?? null,
+    region: regionOf(marker.lat, marker.lon),
+  }
 }
 
 /**
