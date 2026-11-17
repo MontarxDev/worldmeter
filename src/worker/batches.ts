@@ -3,6 +3,7 @@ import { emptyPartial, isPager, type SweepPartial } from "../logic/assemble"
 import { MARKET_SYMBOLS, quoteFromChart } from "../logic/markets"
 import { placeMarker } from "../logic/markers"
 import { FIRMS_BOXES, FIRMS_SOURCES, chooseFirmsSource, firmsSatelliteLabel, parseFirmsPoints, type FirmsAttempt, type FirmsSource } from "../logic/firms"
+import { matchPlace } from "../logic/gazetteer"
 import { adsbUrl, firmsMapUrl, fredSeriesUrl, gdacsEventUrl, nwsAlertUrl, usgsEventUrl } from "../logic/links"
 import { lastFredObservation, latestGscpi, parseKevHead, parseOfacHeader, parseRadnetTail, parseRssItems } from "../logic/parse"
 import type { SourceAttempt } from "../logic/status"
@@ -103,13 +104,45 @@ export async function batchHazards(): Promise<SweepPartial> {
   return join(await Promise.all([gdacs(), nws()]))
 }
 
+const NEWS_FEEDS: readonly [string, string, string][] = [
+  ["bbc", "BBC", "https://feeds.bbci.co.uk/news/world/rss.xml"],
+  ["guardian", "Guardian", "https://www.theguardian.com/world/rss"],
+  ["aljazeera", "Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml"],
+  ["who", "WHO", "https://www.who.int/rss-feeds/news-english.xml"],
+  ["nyt-world", "NYT", "https://rss.nytimes.com/services/xml/rss/nyt/World.xml"],
+  ["npr", "NPR", "https://feeds.npr.org/1004/rss.xml"],
+  ["bbc-tech", "BBC Tech", "https://feeds.bbci.co.uk/news/technology/rss.xml"],
+  ["bbc-science", "BBC Science", "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml"],
+]
+
+const REGIONAL_FEEDS: readonly [string, string, string][] = [
+  ["nyt-americas", "NYT Americas", "https://rss.nytimes.com/services/xml/rss/nyt/Americas.xml"],
+  ["dw", "DW", "https://rss.dw.com/rdf/rss-en-all"],
+  ["france24", "France 24", "https://www.france24.com/en/rss"],
+  ["euronews", "Euronews", "https://www.euronews.com/rss?format=mrss"],
+  ["dw-africa", "DW Africa", "https://rss.dw.com/rdf/rss-en-africa"],
+  ["rfi", "RFI", "https://www.rfi.fr/en/rss"],
+  ["africanews", "Africa News", "https://www.africanews.com/feed/rss"],
+  ["nyt-africa", "NYT Africa", "https://rss.nytimes.com/services/xml/rss/nyt/Africa.xml"],
+  ["nyt-asia", "NYT Asia", "https://rss.nytimes.com/services/xml/rss/nyt/AsiaPacific.xml"],
+  ["sbs", "SBS Australia", "https://www.sbs.com.au/news/topic/australia/feed"],
+  ["indian-express", "Indian Express", "https://indianexpress.com/section/india/feed/"],
+  ["hindu", "The Hindu", "https://www.thehindu.com/news/national/feeder/default.rss"],
+  ["mercopress", "MercoPress", "https://en.mercopress.com/rss/latin-america"],
+]
+
 export async function batchNews(): Promise<SweepPartial> {
-  return join(await Promise.all([
-    rss("bbc", "BBC", "https://feeds.bbci.co.uk/news/world/rss.xml", 40_000),
-    rss("guardian", "Guardian", "https://www.theguardian.com/world/rss", 48_000),
-    rss("aljazeera", "Al Jazeera", "https://www.aljazeera.com/xml/rss/all.xml", 40_000),
-    rss("who", "WHO", "https://www.who.int/rss-feeds/news-english.xml", 48_000),
-  ]))
+  return join(await Promise.all(NEWS_FEEDS.map(([id, name, url]) => (
+    id === "npr" ? rssFirst(id, name, [url, "https://feeds.npr.org/1001/rss.xml"]) : rss(id, name, url)
+  ))))
+}
+
+export async function batchRegions(): Promise<SweepPartial> {
+  return join(await Promise.all(REGIONAL_FEEDS.slice(0, 7).map(([id, name, url]) => rss(id, name, url))))
+}
+
+export async function batchWires(): Promise<SweepPartial> {
+  return join(await Promise.all(REGIONAL_FEEDS.slice(7).map(([id, name, url]) => rss(id, name, url))))
 }
 
 export async function batchGdelt(): Promise<SweepPartial> {
@@ -164,6 +197,8 @@ export const BATCHES: Record<string, (env: WorkerEnv) => Promise<SweepPartial>> 
   geo: () => batchGeo(),
   hazards: () => batchHazards(),
   news: () => batchNews(),
+  regions: () => batchRegions(),
+  wires: () => batchWires(),
   gdelt: () => batchGdelt(),
   markets: () => batchMarkets(),
   rates: () => batchRates(),
@@ -327,40 +362,85 @@ async function nws(): Promise<SweepPartial> {
   })
 }
 
-async function rss(id: string, sourceName: string, url: string, maxBytes: number): Promise<SweepPartial> {
+const RSS_HEADERS = { accept: "application/rss+xml, application/xml, text/xml" }
+
+async function rss(id: string, sourceName: string, url: string): Promise<SweepPartial> {
+  return rssFirst(id, sourceName, [url])
+}
+
+async function rssFirst(id: string, sourceName: string, urls: readonly string[]): Promise<SweepPartial> {
   return source(id, async (partial) => {
-    const response = await fetchCapped(url, { maxBytes, timeoutMs: 10_000, headers: { accept: "application/rss+xml, application/xml, text/xml" } })
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const items = parseRssItems(response.text, 8)
-    for (const item of items) {
-      partial.headlines.push({
-        title: item.title,
-        source: sourceName,
-        url: item.link || url,
-        publishedAt: item.publishedAt,
-      })
+    let lastError = "no response"
+    for (const url of urls) {
+      try {
+        const response = await fetchCapped(url, { maxBytes: 32_000, timeoutMs: 8_000, headers: RSS_HEADERS })
+        if (!response.ok) {
+          lastError = `HTTP ${response.status}`
+          continue
+        }
+        const items = parseRssItems(response.text, 6)
+        for (const item of items) partial.headlines.push(headlineFrom(sourceName, item.title, item.link || url, item.publishedAt, item.lat, item.lon))
+        return { itemCount: items.length, detail: `${items.length} headlines` }
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : "request failed"
+      }
     }
-    return { itemCount: items.length, detail: `${items.length} headlines` }
+    throw new Error(lastError)
   })
+}
+
+function headlineFrom(source: string, title: string, url: string, publishedAt: string | null, lat: number | null, lon: number | null) {
+  const mentioned = lat == null || lon == null ? matchPlace(title) : null
+  return {
+    title,
+    source,
+    url,
+    publishedAt,
+    lat: lat ?? mentioned?.lat ?? null,
+    lon: lon ?? mentioned?.lon ?? null,
+    place: lat != null && lon != null ? "reported location" : mentioned?.name ?? null,
+  }
 }
 
 async function gdelt(): Promise<SweepPartial> {
   return source("gdelt", async (partial) => {
-    const url = "https://api.gdeltproject.org/api/v2/doc/doc?query=sourcelang:english&mode=ArtList&maxrecords=8&timespan=1d&format=json&sort=DateDesc"
-    const response = await fetchCapped(url, { maxBytes: 120_000, timeoutMs: 18_000 })
-    if (response.status === 429) throw new Error("GDELT rate limit: one request every 5 seconds")
-    const body = readJson<{ articles?: { title?: string; url?: string; seendate?: string; domain?: string }[] }>(response.text, response.status)
+    const url = "https://api.gdeltproject.org/api/v2/doc/doc?query=sourcelang:english&mode=ArtList&maxrecords=20&timespan=1d&format=json&sort=DateDesc"
+    const response = await fetchGdelt(url)
+    const body = readJson<{ articles?: { title?: string; url?: string; seendate?: string; domain?: string; sourcecountry?: string }[] }>(response.text, response.status)
     const articles = (body.articles ?? []).filter((article) => article.title)
     for (const article of articles) {
-      partial.headlines.push({
-        title: article.title!,
-        source: article.domain || "GDELT",
-        url: article.url || "https://www.gdeltproject.org/",
-        publishedAt: article.seendate ?? null,
-      })
+      partial.headlines.push(headlineFrom(
+        article.domain || "GDELT",
+        article.title!,
+        article.url || "https://www.gdeltproject.org/",
+        article.seendate ?? null,
+        null,
+        null,
+      ))
     }
     return { itemCount: articles.length, detail: `${articles.length} articles in the last day` }
   })
+}
+
+async function fetchGdelt(url: string) {
+  const attempt = () => fetchCapped(url, { maxBytes: 160_000, timeoutMs: 12_000 })
+  let first: Awaited<ReturnType<typeof fetchCapped>>
+  try {
+    first = await attempt()
+  } catch {
+    await wait(5000)
+    return attempt()
+  }
+  if (first.ok) return first
+  if (first.status !== 429 && first.status < 500) return first
+  await wait(5000)
+  const second = await attempt()
+  if (second.status === 429) throw new Error("GDELT rate limit: one request every 5 seconds")
+  return second
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 async function yahoo(): Promise<SweepPartial> {
@@ -765,12 +845,14 @@ async function bluesky(): Promise<SweepPartial> {
     for (const post of posts.slice(0, 6)) {
       const text = post.record?.text?.replace(/\s+/g, " ").trim()
       if (!text) continue
-      partial.headlines.push({
-        title: text.slice(0, 180),
-        source: post.author?.handle ? `@${post.author.handle}` : "Bluesky",
-        url: "https://bsky.app",
-        publishedAt: post.indexedAt ?? null,
-      })
+      partial.headlines.push(headlineFrom(
+        post.author?.handle ? `@${post.author.handle}` : "Bluesky",
+        text.slice(0, 180),
+        "https://bsky.app",
+        post.indexedAt ?? null,
+        null,
+        null,
+      ))
     }
     return { itemCount: posts.length, detail: `${posts.length} posts` }
   })
@@ -994,12 +1076,14 @@ async function reddit(clientId: string, clientSecret: string): Promise<SweepPart
     const posts = body.data?.children ?? []
     for (const post of posts) {
       if (!post.data?.title) continue
-      partial.headlines.push({
-        title: post.data.title,
-        source: "Reddit r/worldnews",
-        url: post.data.permalink ? `https://www.reddit.com${post.data.permalink}` : "https://www.reddit.com/r/worldnews",
-        publishedAt: post.data.created_utc ? new Date(post.data.created_utc * 1000).toISOString() : null,
-      })
+      partial.headlines.push(headlineFrom(
+        "Reddit r/worldnews",
+        post.data.title,
+        post.data.permalink ? `https://www.reddit.com${post.data.permalink}` : "https://www.reddit.com/r/worldnews",
+        post.data.created_utc ? new Date(post.data.created_utc * 1000).toISOString() : null,
+        null,
+        null,
+      ))
     }
     return { itemCount: posts.length, detail: `${posts.length} posts` }
   })

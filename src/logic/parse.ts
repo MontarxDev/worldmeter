@@ -40,7 +40,7 @@ export function latestGscpi(csv: string): { date: string; value: number } | null
   return null
 }
 
-export type RssItem = { title: string; link: string; publishedAt: string | null }
+export type RssItem = { title: string; link: string; publishedAt: string | null; lat: number | null; lon: number | null }
 
 export function parseRssItems(xml: string, limit = 8): RssItem[] {
   const chunks = xml.split(/<item\b/i).slice(1, limit + 1)
@@ -49,9 +49,26 @@ export function parseRssItems(xml: string, limit = 8): RssItem[] {
     const title = decodeXml(firstTag(chunk, "title"))
     const link = decodeXml(firstTag(chunk, "link"))
     const publishedAt = firstTag(chunk, "pubDate") || firstTag(chunk, "dc:date") || null
-    if (title) items.push({ title, link, publishedAt })
+    const geo = readGeo(chunk)
+    if (title) items.push({ title, link, publishedAt, lat: geo?.lat ?? null, lon: geo?.lon ?? null })
   }
   return items
+}
+
+function readGeo(chunk: string): { lat: number; lon: number } | null {
+  const point = chunk.match(/<georss:point[^>]*>\s*([-\d.]+)\s+([-\d.]+)\s*<\/georss:point>/i)
+  if (point) {
+    const lat = Number(point[1])
+    const lon = Number(point[2])
+    if (Number.isFinite(lat) && Number.isFinite(lon)) return { lat, lon }
+  }
+  const lat = chunk.match(/<geo:lat[^>]*>\s*([-\d.]+)\s*<\/geo:lat>/i)
+  const lon = chunk.match(/<geo:long[^>]*>\s*([-\d.]+)\s*<\/geo:long>/i)
+  if (!lat || !lon) return null
+  const latValue = Number(lat[1])
+  const lonValue = Number(lon[1])
+  if (!Number.isFinite(latValue) || !Number.isFinite(lonValue)) return null
+  return { lat: latValue, lon: lonValue }
 }
 
 function firstTag(xml: string, tag: string): string {

@@ -14,10 +14,13 @@ Node.js 22 or newer.
 npm install
 cp .dev.vars.example .dev.vars
 npm test
+npm run e2e
 npm run dev
 ```
 
 Open http://127.0.0.1:43123 . With no keys, the first request runs a sweep on the Worker. Sources that need a secret show **Not configured**. Sources that respond show **OK** only when the fetch returned items, plus the item count and the time of the last success. **Empty** means the request worked and the payload had nothing in it. **Error** means it failed, and the previous success time is kept.
+
+`npm run e2e` builds the client and clicks the United States, Nigeria, Japan, and Australia on the globe and the flat map. It uses the Chrome binary at `/usr/bin/google-chrome`. The country outlines are `public/countries.geojson` (Natural Earth 110m, via world-atlas). The globe texture is `public/earth-day.jpg`. MapLibre’s worker is `public/maplibre-gl-worker.mjs` so the flat map does not need a tile key.
 
 `npm run dev` builds the client, then starts Wrangler on port 43123. `.dev.vars` sets `SWEEP_INLINE=1` because Wrangler rewrites the local Host header to `news.montarx.com`, so the dev server cannot tell it is localhost from the request alone. That flag runs the sweep inside the page request. Do not set `SWEEP_INLINE` in production. The cron fans the work out so each invocation stays inside the free-plan CPU budget.
 
@@ -75,7 +78,14 @@ EONET is labeled as events in the last 30 days, not as “open” incidents.
 | The Guardian | None | World RSS. |
 | Al Jazeera | None | RSS. Added for coverage outside the US/UK wires. |
 | WHO | None | English news RSS. |
-| GDELT | None | DOC 2.0 article list. One request per sweep. |
+| NYT World, Americas, Africa, Asia | None | New York Times RSS. |
+| NPR | None | World feed, then the main news feed if that one fails. |
+| BBC Tech, BBC Science | None | HTTPS RSS. |
+| DW, DW Africa | None | Deutsche Welle English RSS. |
+| France 24, Euronews, RFI | None | European and African English RSS. |
+| Africa News | None | Africanews RSS. |
+| SBS Australia, Indian Express, The Hindu, MercoPress | None | Regional RSS. |
+| GDELT | None | DOC 2.0 article list, up to 20 articles. A 429 or timeout waits five seconds and retries once, in its own batch. |
 | Yahoo Finance | None | Six symbols. Session change uses the prior close. |
 | Frankfurter / ECB | None | USD crosses, including ZAR and NGN. |
 | US Treasury debt | None | Debt to the penny. Shown as a figure, not a gauge. |
@@ -110,6 +120,8 @@ EONET is labeled as events in the last 30 days, not as “open” incidents.
 - **NASA EONET, USGS, Frankfurter/ECB, BBC, Guardian** — named on their own rows instead of being folded into a bundle that shared one timestamp.
 - **Open-Meteo** — no key, and it places real observations in Africa and South America.
 - **Al Jazeera** — a non-Atlantic wire in the ticker.
+- **Regional RSS** — NYT desks, NPR, BBC science and tech, DW, France 24, Euronews, RFI, Africa News, SBS, Indian Express, The Hindu, and MercoPress. Each feed is a short HTTPS request. Headlines that name a place are pinned on that place and say so. A feed that publishes coordinates uses those instead.
+- **GDELT backoff** — one extra try after five seconds, only inside the GDELT batch, so a 429 does not stall the other feeds.
 - **ISS position** — a single live lat/lon next to the CelesTrak element count.
 - **FRED public CSVs** for the yield curve, high-yield spread, broad dollar, initial claims, 30-year mortgage, and M2. The FRED API remains a separate, optional source.
 - **Oil-transit chokepoints** as fixed geography. They are not a vessel feed.
@@ -120,13 +132,14 @@ Crucix is the upstream dashboard (`dashboard/public/jarvis.html`). Worldmeter ke
 
 | Crucix view | Worldmeter |
 | --- | --- |
-| 3D globe, drag, zoom, markers | Board, 3D globe. Markers are HTML pins on the same projection as the texture. |
-| Flat map, pan, zoom | Board, Flat map. Land is the equirectangular texture. |
+| 3D globe, drag, zoom, markers | Board, 3D globe. three.js through globe.gl, with a NASA earth texture and Natural Earth country polygons. The globe code loads only when that view opens. |
+| Flat map, pan, zoom | Board, Flat map. MapLibre draws the same country GeoJSON. No tile key. |
 | Region filters | Region buttons. |
-| News ticker | Ticker. A click opens the detail card. |
+| News ticker | Ticker, up to 36 stories, doubled so the track can scroll. A click opens the detail card. |
+| News list | News view, and the wire beside the markets. A country click filters both. |
 | Risk gauges | Risk gauges, with the formula under each bar. |
 | Markets | Markets, and the Macro view grouped into indexes, energy, metals, and crypto, with the daily sparkline. |
-| Legend and layer toggles | Legend buttons under the map. |
+| Legend and layer toggles | Legend under the map. Each button uses the same icon and colour as the marker. |
 | Sensor grid | Sensors view. |
 | Nuclear watch | Nuclear view, from Safecast and EPA RadNet. |
 | Space watch | Space view: ISS, the CelesTrak stations count, and DONKI. |

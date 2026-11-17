@@ -15,6 +15,10 @@ export type Headline = {
   source: string
   url: string
   publishedAt: string | null
+  lat: number | null
+  lon: number | null
+  /** Place named in the headline, or "reported location" when the feed included coordinates. */
+  place: string | null
 }
 
 export type MacroFigure = {
@@ -155,6 +159,29 @@ export function describeSweepDelta(
 
 const CHOKEPOINT_URL = "https://www.eia.gov/international/analysis/special-topics/World_Oil_Transit_Chokepoints"
 
+function newsMarkers(headlines: readonly Headline[]): Marker[] {
+  const pins: Marker[] = []
+  for (const item of headlines) {
+    if (item.lat == null || item.lon == null || pins.length >= 24) continue
+    const reported = item.place === "reported location"
+    pins.push(placeMarker({
+      id: `news-${pins.length}`,
+      sourceId: "news",
+      kind: "News",
+      title: item.title,
+      detail: reported
+        ? "This feed included coordinates for the item."
+        : `Headline mentions ${item.place}. The pin is that place, not a measured event location.`,
+      lat: item.lat,
+      lon: item.lon,
+      severity: "info",
+      url: item.url,
+      observedAt: item.publishedAt,
+    }))
+  }
+  return pins
+}
+
 function chokepointMarkers(): Marker[] {
   return CHOKEPOINTS.map((point) => placeMarker({
     id: `choke-${point.id}`,
@@ -202,10 +229,12 @@ export function assembleSnapshot(
     if (seen.has(key)) return false
     seen.add(key)
     return true
-  }).slice(0, 40)
+  }).slice(0, 80)
 
+  const stories = newsMarkers(headlines)
   const straits = chokepointMarkers()
-  const markers = [...straits, ...capMarkers(merged.markers, 160 - straits.length)]
+  const reserved = straits.length + stories.length
+  const markers = [...straits, ...stories, ...capMarkers(merged.markers, Math.max(160 - reserved, 40))]
   return {
     ready: true,
     generatedAt,

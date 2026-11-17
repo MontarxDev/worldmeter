@@ -1,20 +1,20 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from "react"
 import type { Snapshot } from "../logic/assemble"
+import { featureContains, mentionsCountry, type CountryFeature } from "../logic/geo"
 import { yahooQuoteUrl } from "../logic/links"
 import { formatChange } from "../logic/markets"
 import type { Marker } from "../logic/markers"
 import { cardId, REGION_IDS, REGION_LABELS, type RegionId } from "../logic/regions"
-import { FlatMap } from "./FlatMap"
-import type { MapFocus } from "./GlobePanel"
+import { eventType, EVENT_TYPES, Legend } from "./icons"
+import type { MapFocus } from "./map-types"
 import {
   DeltaPanel,
   DetailCard,
   Glossary,
   headlineDetail,
-  LAYERS,
   MacroPanel,
   markerDetail,
-  markerLayer,
+  NewsPanel,
   NuclearWatch,
   SensorGrid,
   signalDetail,
@@ -24,13 +24,15 @@ import {
 } from "./panels"
 
 const GlobePanel = lazy(() => import("./GlobePanel").then((mod) => ({ default: mod.GlobePanel })))
+const FlatMap = lazy(() => import("./FlatMap").then((mod) => ({ default: mod.FlatMap })))
 
 type Pending = { ready: false; message: string }
 type Payload = Snapshot | Pending
-type ViewId = "board" | "sensors" | "nuclear" | "space" | "macro" | "delta" | "glossary"
+type ViewId = "board" | "news" | "sensors" | "nuclear" | "space" | "macro" | "delta" | "glossary"
 
 const VIEWS: { id: ViewId; label: string }[] = [
   { id: "board", label: "Board" },
+  { id: "news", label: "News" },
   { id: "sensors", label: "Sensors" },
   { id: "nuclear", label: "Nuclear" },
   { id: "space", label: "Space" },
@@ -56,10 +58,29 @@ export function App() {
   const [panel, setPanel] = useState<"sources" | "signals" | null>(null)
   const [view, setView] = useState<ViewId>("board")
   const [dismissed, setDismissed] = useState<string[]>([])
-  const [layers, setLayers] = useState<string[]>(() => LAYERS.map((layer) => layer.id))
+  const [layers, setLayers] = useState<string[]>(() => EVENT_TYPES.map((type) => type.id))
+  const [countries, setCountries] = useState<CountryFeature[]>([])
+  const [selectedCountry, setSelectedCountry] = useState<string | null>(null)
   const [visuals, setVisuals] = useState<"full" | "lite">("full")
   const [detail, setDetail] = useState<DetailItem | null>(null)
   const [focus, setFocus] = useState<MapFocus | null>(null)
+
+  useEffect(() => {
+    let stop = false
+    void fetch("/countries.geojson")
+      .then((response) => response.json())
+      .then((body: { features?: CountryFeature[] }) => {
+        if (stop || !body.features) return
+        setCountries(body.features)
+        window.__worldmeterCountries = body.features
+      })
+      .catch(() => {
+        if (!stop) setCountries([])
+      })
+    return () => {
+      stop = true
+    }
+  }, [])
 
   useEffect(() => {
     const stored = window.localStorage.getItem("worldmeter-visuals")
@@ -113,13 +134,27 @@ export function App() {
   }, [panel, detail])
 
   const snapshot = data && data.ready ? data : null
+  const selectedFeature = useMemo(
+    () => countries.find((feature) => feature.properties.name === selectedCountry) ?? null,
+    [countries, selectedCountry],
+  )
   const markers = useMemo(() => {
     if (!snapshot) return []
     return snapshot.markers.filter((marker) => {
       if (region !== "world" && marker.region !== region) return false
-      return layers.includes(markerLayer(marker.kind))
+      if (!layers.includes(eventType(marker.kind, marker.title))) return false
+      if (selectedFeature && !featureContains(selectedFeature, marker.lon, marker.lat)) return false
+      return true
     })
-  }, [snapshot, region, layers])
+  }, [snapshot, region, layers, selectedFeature])
+  const stories = useMemo(() => {
+    if (!snapshot) return []
+    if (!selectedFeature) return snapshot.headlines
+    return snapshot.headlines.filter((item) => {
+      if (item.lat != null && item.lon != null && featureContains(selectedFeature, item.lon, item.lat)) return true
+      return mentionsCountry(item.title, selectedFeature)
+    })
+  }, [snapshot, selectedFeature])
 
   const counts = useMemo(() => {
     const tally: Record<string, number> = {}
@@ -133,6 +168,21 @@ export function App() {
   const toasts = (snapshot?.signals ?? []).filter(
     (signal) => (signal.tier === "FLASH" || signal.tier === "PRIORITY") && !dismissed.includes(signal.id),
   ).slice(0, 3)
+
+  function chooseCountry(name: string) {
+    if (selectedCountry === name) {
+      setSelectedCountry(null)
+      return
+    }
+    setSelectedCountry(name)
+    const feature = countries.find((item) => item.properties.name === name)
+    if (feature) setFocus({ lat: feature.properties.lat, lon: feature.properties.lon, token: Date.now() })
+  }
+
+  function openStory(item: (typeof stories)[number]) {
+    setDetail(headlineDetail(item))
+    if (item.lat != null && item.lon != null) setFocus({ lat: item.lat, lon: item.lon, token: Date.now() })
+  }
 
   function openMarker(marker: Marker) {
     setDetail(markerDetail(marker))
@@ -183,14 +233,14 @@ export function App() {
 
       <div className="ticker-wrap">
         <div className="ticker" role="region" aria-label="News headlines">
-          {snapshot && snapshot.headlines.length > 0 ? (
+          {stories.length > 0 ? (
             <div className={tickerPaused || visuals === "lite" ? "ticker-track paused" : "ticker-track"}>
-              {[...snapshot.headlines, ...snapshot.headlines].map((item, index) => (
+              {[...stories.slice(0, 36), ...stories.slice(0, 36)].map((item, index) => (
                 <button
                   key={`${item.url}-${index}`}
                   type="button"
                   className="ticker-item"
-                  onClick={() => snapshot && setDetail(headlineDetail(item))}
+                  onClick={() => openStory(item)}
                 >
                   <strong>{item.source}</strong> {item.title}
                 </button>
@@ -272,40 +322,47 @@ export function App() {
           </section>
 
           <section className="stage" aria-label="Map">
+            {selectedCountry && (
+              <p className="country-banner">
+                <span data-testid="selected-country">{selectedCountry}</span>
+                <button type="button" className="btn" onClick={() => setSelectedCountry(null)}>Clear country</button>
+              </p>
+            )}
             <div className="map-frame">
               {mode === "globe" ? (
                 <Suspense fallback={<p className="meta" style={{ padding: "1rem" }}>Loading the globe…</p>}>
                   <GlobePanel
                     markers={markers}
-                    region={region}
+                    countries={countries}
+                    selectedCountry={selectedCountry}
                     paused={globePaused || visuals === "lite"}
                     focus={focus}
                     onPick={openMarker}
+                    onCountry={chooseCountry}
                   />
                 </Suspense>
               ) : (
-                <FlatMap markers={markers} focus={focus} onPick={openMarker} />
+                <Suspense fallback={<p className="meta" style={{ padding: "1rem" }}>Loading the map…</p>}>
+                  <FlatMap
+                    markers={markers}
+                    countries={countries}
+                    selectedCountry={selectedCountry}
+                    focus={focus}
+                    onPick={openMarker}
+                    onCountry={chooseCountry}
+                  />
+                </Suspense>
               )}
             </div>
             <p className="meta map-hint">
               {mode === "globe"
-                ? "Drag to rotate. Scroll or pinch to zoom. Rotation pauses while you interact."
-                : "Drag to pan. Scroll or pinch to zoom. Land is the equirectangular map; markers use longitude and latitude."}
+                ? "Drag to rotate. Scroll or pinch to zoom. Rotation pauses while you interact. Click a country to filter the lists."
+                : "Drag to pan. Scroll or pinch to zoom. Click a country to filter the lists. A numbered circle is a cluster."}
             </p>
-            <div className="legend" role="group" aria-label="Map layers">
-              {LAYERS.map((layer) => (
-                <button
-                  key={layer.id}
-                  type="button"
-                  className="btn layer"
-                  aria-pressed={layers.includes(layer.id)}
-                  onClick={() => setLayers((current) => current.includes(layer.id) ? current.filter((id) => id !== layer.id) : [...current, layer.id])}
-                >
-                  <i style={{ background: layer.color }} />
-                  {layer.label}
-                </button>
-              ))}
-            </div>
+            <Legend
+              active={layers}
+              onToggle={(id) => setLayers((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])}
+            />
             <div className="legend">
               <span>{markers.length} markers in view</span>
               {mode === "globe" && (
@@ -367,13 +424,14 @@ export function App() {
                 <p className="stat" id={cardId("fx")}>{snapshot.fx.map((rate) => `${rate.pair} ${rate.rate.toFixed(2)}`).join(" · ")}</p>
               )}
             </div>
-            {snapshot && <WireList snapshot={snapshot} onOpen={(item) => setDetail(headlineDetail(item))} />}
+            {snapshot && <WireList headlines={stories} onOpen={openStory} />}
           </aside>
         </main>
       )}
 
       {snapshot && view !== "board" && (
         <main id="board" className="view-wrap">
+          {view === "news" && <NewsPanel headlines={stories} onOpen={openStory} />}
           {view === "sensors" && <SensorGrid snapshot={snapshot} onOpen={openMarker} />}
           {view === "nuclear" && <NuclearWatch snapshot={snapshot} onOpen={openMarker} />}
           {view === "space" && <SpaceWatch snapshot={snapshot} onOpen={openMarker} />}

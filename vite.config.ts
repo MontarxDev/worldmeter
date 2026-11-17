@@ -11,7 +11,8 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
-          if (id.includes("cobe")) return "globe"
+          if (id.includes("node_modules/three") || id.includes("globe.gl") || id.includes("three-globe")) return "globe"
+          if (id.includes("maplibre-gl")) return "map"
         },
       },
     },

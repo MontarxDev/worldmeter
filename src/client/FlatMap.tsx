@@ -1,243 +1,179 @@
-import { useEffect, useRef, useState } from "react"
-import { flatProject, flatUnproject } from "../logic/globe"
+import { useEffect, useRef } from "react"
+import type { GeoJSONSource, Map as MapLibreMap } from "maplibre-gl"
+import type { FeatureCollection } from "geojson"
+import type { CountryFeature } from "../logic/geo"
 import type { Marker } from "../logic/markers"
-import type { MapFocus } from "./GlobePanel"
-
-const PIN_COLOR: Record<Marker["severity"], string> = {
-  flash: "#ff6b5a",
-  priority: "#f0b429",
-  routine: "#c6f56b",
-  info: "#9fd7ff",
-}
+import { clusterMarkers } from "./cluster"
+import { clusterElement, markerElement } from "./icons"
+import type { MapFocus } from "./map-types"
 
 export function FlatMap({
   markers,
+  countries,
+  selectedCountry,
   focus,
   onPick,
+  onCountry,
 }: {
   markers: Marker[]
+  countries: CountryFeature[]
+  selectedCountry: string | null
   focus: MapFocus | null
   onPick: (marker: Marker) => void
+  onCountry: (name: string) => void
 }) {
-  const ref = useRef<HTMLCanvasElement>(null)
-  const viewRef = useRef({ x: 0, y: 0, scale: 1 })
-  const readyRef = useRef(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<MapLibreMap | null>(null)
+  const pinsRef = useRef<{ remove: () => void }[]>([])
   const markersRef = useRef(markers)
-  const movedRef = useRef(false)
-  const drawRef = useRef<() => void>(() => {})
+  const countriesRef = useRef(countries)
+  const selectedRef = useRef(selectedCountry)
   const onPickRef = useRef(onPick)
-  onPickRef.current = onPick
-  const [tip, setTip] = useState<{ x: number; y: number; title: string; detail: string } | null>(null)
+  const onCountryRef = useRef(onCountry)
   markersRef.current = markers
+  countriesRef.current = countries
+  selectedRef.current = selectedCountry
+  onPickRef.current = onPick
+  onCountryRef.current = onCountry
 
   useEffect(() => {
-    const canvas = ref.current
-    if (!canvas) return
-    const image = new Image()
-    // Equirectangular land mask shipped with cobe (MIT).
-    image.src = "/world-land.png"
-    image.onload = () => draw()
+    const wrap = wrapRef.current
+    if (!wrap) return
+    let map: MapLibreMap | null = null
+    let alive = true
 
-    const draw = () => {
-      const width = canvas.clientWidth
-      const height = canvas.clientHeight
-      if (width < 2 || height < 2) return
-      if (!readyRef.current) {
-        viewRef.current = { x: width / 2, y: height / 2, scale: 1 }
-        readyRef.current = true
+    void import("maplibre-gl").then((maplibregl) => {
+      if (!document.querySelector("link[data-maplibre]")) {
+        const link = document.createElement("link")
+        link.rel = "stylesheet"
+        link.href = "/maplibre-gl.css"
+        link.dataset.maplibre = "1"
+        document.head.appendChild(link)
       }
-      const dpr = Math.min(window.devicePixelRatio || 1, 2)
-      canvas.width = Math.floor(width * dpr)
-      canvas.height = Math.floor(height * dpr)
-      const ctx = canvas.getContext("2d")
-      if (!ctx) return
-      const view = viewRef.current
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      ctx.fillStyle = "#101814"
-      ctx.fillRect(0, 0, width, height)
-      const dx = (0 - view.x) * view.scale + width / 2
-      const dy = (0 - view.y) * view.scale + height / 2
-      const dw = width * view.scale
-      const dh = height * view.scale
-      if (image.complete && image.naturalWidth > 0) {
-        ctx.drawImage(image, dx, dy, dw, dh)
-        ctx.globalCompositeOperation = "multiply"
-        ctx.fillStyle = "#9bb896"
-        ctx.fillRect(dx, dy, dw, dh)
-        ctx.globalCompositeOperation = "lighten"
-        ctx.fillStyle = "#163028"
-        ctx.fillRect(dx, dy, dw, dh)
-        ctx.globalCompositeOperation = "source-over"
-      } else {
-        ctx.strokeStyle = "#314038"
-        ctx.strokeRect(dx, dy, dw, dh)
-      }
-      ctx.strokeStyle = "rgba(197, 210, 222, 0.25)"
-      ctx.lineWidth = 1
-      for (let lon = -180; lon <= 180; lon += 30) {
-        const start = flatProject(0, lon, width, height, view)
-        const end = flatProject(80, lon, width, height, view)
-        ctx.beginPath()
-        ctx.moveTo(start.x, start.y)
-        ctx.lineTo(end.x, end.y)
-        ctx.stroke()
-      }
-      for (const marker of markersRef.current) {
-        const point = flatProject(marker.lat, marker.lon, width, height, view)
-        if (point.x < -8 || point.y < -8 || point.x > width + 8 || point.y > height + 8) continue
-        ctx.beginPath()
-        ctx.fillStyle = PIN_COLOR[marker.severity]
-        ctx.arc(point.x, point.y, marker.severity === "info" ? 4 : 6, 0, Math.PI * 2)
-        ctx.fill()
-      }
-    }
+      if (!alive || !wrap) return
+      maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs")
+      const current = new maplibregl.Map({
+        container: wrap,
+        attributionControl: false,
+        renderWorldCopies: false,
+        style: {
+          version: 8,
+          sources: {},
+          layers: [{ id: "background", type: "background", paint: { "background-color": "#101814" } }],
+        },
+        center: [10, 15],
+        zoom: 1.15,
+      })
+      map = current
+      mapRef.current = current
+      current.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right")
 
-    const nearest = (x: number, y: number) => {
-      const width = canvas.clientWidth
-      const height = canvas.clientHeight
-      let best: Marker | null = null
-      let bestPx = 18
-      for (const marker of markersRef.current) {
-        const point = flatProject(marker.lat, marker.lon, width, height, viewRef.current)
-        const px = Math.hypot(point.x - x, point.y - y)
-        if (px < bestPx) {
-          bestPx = px
-          best = marker
+      const placePins = () => {
+        for (const pin of pinsRef.current) pin.remove()
+        const zoom = Math.round(current.getZoom())
+        const items = clusterMarkers(markersRef.current, zoom < 4 ? Math.max(zoom, 0) : 6)
+        pinsRef.current = items.map((item) => {
+          const element = item.kind === "cluster"
+            ? clusterElement(item.count, () => {
+                current.easeTo({ center: [item.lng, item.lat], zoom: Math.min(Math.max(item.expansionZoom, current.getZoom() + 1), 6) })
+              })
+            : markerElement(item.marker, (picked) => onPickRef.current(picked))
+          return new maplibregl.Marker({ element, anchor: "center" }).setLngLat([item.lng, item.lat]).addTo(current)
+        })
+      }
+
+      current.on("load", () => {
+        current.addSource("countries", {
+          type: "geojson",
+          data: collection(countriesRef.current),
+        })
+        current.addLayer({
+          id: "countries-fill",
+          type: "fill",
+          source: "countries",
+          paint: { "fill-color": "#1c3d2c", "fill-opacity": 0.95 },
+        })
+        current.addLayer({
+          id: "countries-line",
+          type: "line",
+          source: "countries",
+          paint: { "line-color": "#9bb896", "line-width": 0.7 },
+        })
+        paintCountries(current, selectedRef.current)
+        current.on("click", "countries-fill", (event) => {
+          const name = event.features?.[0]?.properties?.name
+          if (typeof name === "string") onCountryRef.current(name)
+        })
+        current.on("mouseenter", "countries-fill", () => {
+          current.getCanvas().style.cursor = "pointer"
+        })
+        current.on("mouseleave", "countries-fill", () => {
+          current.getCanvas().style.cursor = ""
+        })
+        window.__worldmeterMap = {
+          project: (lnglat) => {
+            const point = current.project(lnglat)
+            return { x: point.x, y: point.y }
+          },
+          jumpTo: (options) => {
+            current.jumpTo(options)
+          },
+          whenIdle: () => new Promise<void>((resolve) => {
+            let settled = false
+            const finish = () => {
+              if (settled) return
+              settled = true
+              resolve()
+            }
+            current.once("idle", finish)
+            window.setTimeout(finish, 700)
+          }),
+          featuresAt: (point: { x: number; y: number }) => current.queryRenderedFeatures([point.x, point.y], { layers: ["countries-fill"] }).map((feature) => feature.properties?.name),
+          getContainer: () => current.getContainer(),
         }
-      }
-      return best
-    }
+        placePins()
+      })
+      current.on("zoomend", placePins)
+    })
 
-    let drag: { x: number; y: number; viewX: number; viewY: number; pinch: number; scale: number } | null = null
-    const pointers = new Map<number, { x: number; y: number }>()
-
-    const onDown = (event: PointerEvent) => {
-      canvas.setPointerCapture(event.pointerId)
-      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
-      movedRef.current = false
-      const [a, b] = [...pointers.values()]
-      drag = {
-        x: event.clientX,
-        y: event.clientY,
-        viewX: viewRef.current.x,
-        viewY: viewRef.current.y,
-        pinch: pointers.size >= 2 && a && b ? Math.hypot(a.x - b.x, a.y - b.y) || 1 : 0,
-        scale: viewRef.current.scale,
-      }
-    }
-    const onMove = (event: PointerEvent) => {
-      if (!pointers.has(event.pointerId) || !drag) {
-        const rect = canvas.getBoundingClientRect()
-        const hit = nearest(event.clientX - rect.left, event.clientY - rect.top)
-        setTip(hit
-          ? { x: event.clientX - rect.left, y: event.clientY - rect.top, title: hit.title, detail: hit.detail }
-          : null)
-        return
-      }
-      pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
-      if (pointers.size >= 2) {
-        const [a, b] = [...pointers.values()]
-        const distance = Math.hypot(a.x - b.x, a.y - b.y) || 1
-        const start = drag.pinch || distance
-        viewRef.current.scale = clamp(drag.scale * (distance / start), 1, 8)
-        movedRef.current = true
-        draw()
-        return
-      }
-      const dx = event.clientX - drag.x
-      const dy = event.clientY - drag.y
-      if (Math.hypot(dx, dy) > 4) movedRef.current = true
-      viewRef.current.x = drag.viewX - dx / viewRef.current.scale
-      viewRef.current.y = drag.viewY - dy / viewRef.current.scale
-      draw()
-    }
-    const onUp = (event: PointerEvent) => {
-      pointers.delete(event.pointerId)
-      if (pointers.size === 0 && drag && !movedRef.current) {
-        const rect = canvas.getBoundingClientRect()
-        const x = event.clientX - rect.left
-        const y = event.clientY - rect.top
-        const hit = nearest(x, y)
-        if (hit) onPickRef.current(hit)
-        else {
-          const where = flatUnproject(x, y, canvas.clientWidth, canvas.clientHeight, viewRef.current)
-          if (where) setTip({ x, y, title: `${where.lat.toFixed(1)}°, ${where.lon.toFixed(1)}°`, detail: "No marker at this point" })
-        }
-      }
-      if (pointers.size === 0) drag = null
-    }
-    const onWheel = (event: WheelEvent) => {
-      event.preventDefault()
-      const rect = canvas.getBoundingClientRect()
-      const x = event.clientX - rect.left
-      const y = event.clientY - rect.top
-      const before = flatUnproject(x, y, canvas.clientWidth, canvas.clientHeight, viewRef.current)
-      const next = clamp(viewRef.current.scale * (event.deltaY > 0 ? 0.9 : 1.1), 1, 8)
-      viewRef.current.scale = next
-      if (before) {
-        const width = canvas.clientWidth
-        const height = canvas.clientHeight
-        const worldX = ((before.lon + 180) / 360) * width
-        const worldY = ((90 - before.lat) / 180) * height
-        viewRef.current.x = worldX - (x - width / 2) / next
-        viewRef.current.y = worldY - (y - height / 2) / next
-      }
-      draw()
-    }
-
-    drawRef.current = draw
-    draw()
-    const onResize = () => {
-      readyRef.current = false
-      draw()
-    }
-    window.addEventListener("resize", onResize)
-    canvas.addEventListener("pointerdown", onDown)
-    canvas.addEventListener("pointermove", onMove)
-    canvas.addEventListener("pointerup", onUp)
-    canvas.addEventListener("pointercancel", onUp)
-    canvas.addEventListener("pointerleave", () => setTip(null))
-    canvas.addEventListener("wheel", onWheel, { passive: false })
     return () => {
-      window.removeEventListener("resize", onResize)
-      canvas.removeEventListener("pointerdown", onDown)
-      canvas.removeEventListener("pointermove", onMove)
-      canvas.removeEventListener("pointerup", onUp)
-      canvas.removeEventListener("pointercancel", onUp)
-      canvas.removeEventListener("wheel", onWheel)
+      alive = false
+      for (const pin of pinsRef.current) pin.remove()
+      pinsRef.current = []
+      map?.remove()
+      mapRef.current = null
+      delete window.__worldmeterMap
     }
   }, [])
 
   useEffect(() => {
-    const canvas = ref.current
-    if (!canvas || !focus || !readyRef.current) return
-    const width = canvas.clientWidth
-    const height = canvas.clientHeight
-    viewRef.current = {
-      x: ((focus.lon + 180) / 360) * width,
-      y: ((90 - focus.lat) / 180) * height,
-      scale: Math.max(viewRef.current.scale, 2.4),
-    }
-    drawRef.current()
-  }, [focus])
+    const map = mapRef.current
+    if (!map?.isStyleLoaded() || !map.getSource("countries")) return
+    const source = map.getSource("countries")
+    if (source?.type === "geojson") (source as GeoJSONSource).setData(collection(countries))
+    paintCountries(map, selectedCountry)
+    map.fire("zoomend")
+  }, [countries, selectedCountry, markers])
 
   useEffect(() => {
-    drawRef.current()
-  }, [markers])
+    const map = mapRef.current
+    if (!map || !focus) return
+    map.easeTo({ center: [focus.lon, focus.lat], zoom: Math.max(map.getZoom(), 3.2) })
+  }, [focus])
 
-  return (
-    <div className="flat-wrap">
-      <canvas ref={ref} className="flat-canvas" aria-label="Flat world map. Drag to pan, scroll or pinch to zoom." />
-      {tip && (
-        <div className="tip" style={{ left: tip.x, top: tip.y }} role="tooltip">
-          <strong>{tip.title}</strong>
-          <span>{tip.detail}</span>
-        </div>
-      )}
-    </div>
-  )
+  return <div ref={wrapRef} className="flat-wrap" data-testid="flat-map" />
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value))
+function collection(features: CountryFeature[]): FeatureCollection {
+  return { type: "FeatureCollection", features: features as FeatureCollection["features"] }
+}
+
+function paintCountries(map: MapLibreMap, selected: string | null) {
+  if (!map.getLayer("countries-fill")) return
+  map.setPaintProperty("countries-fill", "fill-color", [
+    "case",
+    ["==", ["get", "name"], selected ?? ""],
+    "#f0b429",
+    "#1c3d2c",
+  ])
 }

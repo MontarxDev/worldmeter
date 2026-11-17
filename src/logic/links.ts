@@ -19,6 +19,7 @@ export const SOURCE_HOME: Record<string, string> = {
   aljazeera: "https://www.aljazeera.com/",
   who: "https://www.who.int/news",
   gdelt: "https://www.gdeltproject.org/",
+  news: "https://news.montarx.com/",
   yahoo: "https://finance.yahoo.com/",
   bluesky: "https://bsky.app/",
   reddit: "https://www.reddit.com/r/worldnews/",

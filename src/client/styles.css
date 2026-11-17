@@ -161,12 +161,20 @@ button.ticker-item {
 .layer i { width: 0.7rem; height: 0.7rem; border-radius: 50%; display: inline-block; }
 .layer[aria-pressed="false"] { opacity: 0.45; }
 .detail {
+  position: fixed;
+  z-index: 30;
+  right: 1rem;
+  bottom: 1rem;
+  width: min(28rem, calc(100vw - 2rem));
+  max-height: min(70vh, 32rem);
+  overflow: auto;
   background: var(--raise-2);
   border: 1px solid var(--line);
   border-radius: 14px;
   padding: 0.85rem;
   display: grid;
   gap: 0.35rem;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
 }
 .detail header { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
 .detail h2 { margin: 0; font-size: 1.2rem; font-family: var(--serif); }
@@ -249,40 +257,58 @@ button.ticker-item {
   border-radius: 14px;
   overflow: hidden;
 }
-.flat-wrap { position: relative; }
-.map-frame canvas.flat-canvas {
-  width: 100%;
-  height: min(70vh, 640px);
-  min-height: 280px;
-  display: block;
-  touch-action: none;
-}
+.flat-wrap,
 .globe-wrap {
   position: relative;
-  width: min(100%, 520px);
-  margin: 0 auto;
-  aspect-ratio: 1;
+  width: 100%;
+  height: min(70vh, 640px);
+  min-height: 320px;
   touch-action: none;
 }
-.map-frame canvas.globe-canvas {
-  width: 100%;
-  height: 100%;
-  aspect-ratio: 1;
-  display: block;
-}
-.pin-layer { position: absolute; inset: 0; pointer-events: none; }
-.pin {
-  position: absolute;
-  width: 16px;
-  height: 16px;
+.globe-wrap canvas { display: block; }
+.scene-container { width: 100%; height: 100%; }
+.event-marker, .event-cluster { pointer-events: auto; }
+.scene-nav-info { display: none !important; }
+.event-marker,
+.event-cluster {
   margin: 0;
   padding: 0;
-  border: 2px solid #121714;
-  border-radius: 50%;
-  transform: translate(-50%, -50%);
-  pointer-events: auto;
+  border: 0;
+  display: grid;
+  place-items: center;
   cursor: pointer;
+  background: rgba(12, 18, 16, 0.88);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6);
 }
+.event-marker { border-radius: 50%; }
+.event-cluster {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 0.35rem;
+  border-radius: 99px;
+  color: #f4f7fb;
+  font-weight: 700;
+  font-size: 0.75rem;
+}
+.legend-icon {
+  width: 16px;
+  height: 16px;
+  display: inline-grid;
+}
+.legend-note { align-self: center; }
+.country-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 0.45rem 0.7rem;
+  background: #3a3118;
+  border: 1px solid #f0b429;
+  border-radius: 10px;
+  color: #f6e7b2;
+}
+.layer { display: inline-flex; align-items: center; gap: 0.35rem; }
 .tip {
   position: absolute;
   z-index: 5;

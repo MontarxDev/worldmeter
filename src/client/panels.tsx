@@ -2,6 +2,7 @@ import type { Headline, Snapshot } from "../logic/assemble"
 import { formatChange } from "../logic/markets"
 import type { Marker } from "../logic/markers"
 import type { Signal } from "../logic/signals"
+import { eventType } from "./icons"
 
 export type DetailItem = {
   id: string
@@ -16,24 +17,8 @@ export type DetailItem = {
   severity: string | null
 }
 
-export const LAYERS: { id: string; label: string; color: string; match: (kind: string) => boolean }[] = [
-  { id: "quake", label: "Quakes", color: "#ff6b5a", match: (kind) => kind === "Quake" },
-  { id: "weather", label: "Weather", color: "#7eb6ff", match: (kind) => kind === "Weather" || /storm/i.test(kind) },
-  { id: "fire", label: "Fires", color: "#f0b429", match: (kind) => kind === "Fire" || /wildfire|volcano/i.test(kind) },
-  { id: "flight", label: "Flights", color: "#9fd7ff", match: (kind) => kind === "Flight" },
-  { id: "radiation", label: "Radiation", color: "#c6f56b", match: (kind) => kind === "Radiation" },
-  { id: "conflict", label: "Conflict", color: "#e07a5f", match: (kind) => kind === "Conflict" },
-  { id: "relief", label: "Relief", color: "#d4a373", match: (kind) => kind === "Relief" || kind === "GDACS" },
-  { id: "space", label: "Space", color: "#ffffff", match: (kind) => kind === "ISS" },
-  { id: "choke", label: "Chokepoints", color: "#f2d16b", match: (kind) => kind === "Chokepoint" },
-  { id: "other", label: "Other", color: "#c5d2de", match: () => true },
-]
-
-export function markerLayer(kind: string): string {
-  for (const layer of LAYERS) {
-    if (layer.id !== "other" && layer.match(kind)) return layer.id
-  }
-  return "other"
+export function markerLayer(kind: string, title = ""): string {
+  return eventType(kind, title)
 }
 
 export function markerDetail(marker: Marker): DetailItem {
@@ -67,14 +52,19 @@ export function signalDetail(signal: Signal): DetailItem {
 }
 
 export function headlineDetail(item: Headline): DetailItem {
+  const located = item.place && item.place !== "reported location"
   return {
     id: item.url,
     title: item.title,
     kind: "Headline",
-    detail: item.source,
+    detail: located
+      ? `${item.source}. Headline mentions ${item.place}. The pin is that place, not a measured event location.`
+      : item.lat != null
+        ? `${item.source}. This feed included coordinates.`
+        : item.source,
     url: item.url,
-    lat: null,
-    lon: null,
+    lat: item.lat,
+    lon: item.lon,
     observedAt: item.publishedAt,
     figures: null,
     severity: null,
@@ -113,8 +103,8 @@ export function SensorGrid({ snapshot, onOpen }: { snapshot: Snapshot; onOpen: (
   const who = snapshot.headlines.filter((item) => /who/i.test(item.source)).length
   const stations = snapshot.sources.find((source) => source.id === "celestrak")
   const rows = [
-    ["Air", snapshot.markers.filter((marker) => markerLayer(marker.kind) === "weather").length, "Open-Meteo cities and NWS extreme alerts"],
-    ["Thermal", snapshot.markers.filter((marker) => markerLayer(marker.kind) === "fire").length, "FIRMS detections plus EONET wildfires and volcanoes"],
+    ["Air", snapshot.markers.filter((marker) => markerLayer(marker.kind, marker.title) === "weather").length, "Open-Meteo cities and NWS extreme alerts"],
+    ["Thermal", snapshot.markers.filter((marker) => markerLayer(marker.kind, marker.title) === "fire").length, "FIRMS detections plus EONET wildfires and volcanoes"],
     ["Nuclear", snapshot.markers.filter((marker) => marker.kind === "Radiation").length, "Safecast samples and EPA RadNet stations"],
     ["Conflict", snapshot.markers.filter((marker) => marker.kind === "Conflict").length, "ACLED events when the key is set"],
     ["Health", who, "WHO headlines in this sweep"],
@@ -142,7 +132,7 @@ export function SensorGrid({ snapshot, onOpen }: { snapshot: Snapshot; onOpen: (
       <h3>Signal core</h3>
       <p>
         {snapshot.markers.filter((marker) => marker.kind === "Flight").length} flights,{" "}
-        {snapshot.markers.filter((marker) => markerLayer(marker.kind) === "fire").length} thermal points,{" "}
+        {snapshot.markers.filter((marker) => markerLayer(marker.kind, marker.title) === "fire").length} thermal points,{" "}
         {snapshot.markers.filter((marker) => marker.kind === "Quake").length} quakes,{" "}
         {who} WHO headlines,{" "}
         {snapshot.markers.filter((marker) => marker.kind === "Chokepoint").length} chokepoints on the map.
@@ -303,17 +293,41 @@ export function Glossary() {
   )
 }
 
-export function WireList({ snapshot, onOpen }: { snapshot: Snapshot; onOpen: (item: Headline) => void }) {
+export function WireList({ headlines, onOpen }: { headlines: readonly Headline[]; onOpen: (item: Headline) => void }) {
   return (
     <section className="panel" aria-labelledby="wire-heading">
       <h2 id="wire-heading">Wire</h2>
-      {snapshot.headlines.length === 0 && <p className="meta">No headlines in this sweep.</p>}
+      {headlines.length === 0 && <p className="meta">No headlines in this sweep.</p>}
       <ul className="feed">
-        {snapshot.headlines.slice(0, 16).map((item) => (
-          <li key={item.url}>
+        {headlines.slice(0, 28).map((item, index) => (
+          <li key={`${item.url}-${index}`}>
             <button type="button" className="row-btn" onClick={() => onOpen(item)}>
               <strong>{item.source}</strong>
               <span>{item.title}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+export function NewsPanel({ headlines, onOpen }: { headlines: readonly Headline[]; onOpen: (item: Headline) => void }) {
+  return (
+    <section className="panel wide" aria-labelledby="news-heading" data-testid="news-panel">
+      <h2 id="news-heading">News</h2>
+      <p className="meta">
+        {headlines.length} stories from the RSS wires and GDELT.
+        A story with a place name is pinned on that place. The pin is not a measured event location.
+      </p>
+      {headlines.length === 0 && <p>No stories in this sweep for the current country filter.</p>}
+      <ul className="feed">
+        {headlines.slice(0, 60).map((item, index) => (
+          <li key={`${item.url}-${index}`}>
+            <button type="button" className="row-btn" onClick={() => onOpen(item)}>
+              <strong>{item.source}</strong>
+              <span>{item.title}</span>
+              {item.place && <span className="meta">{item.place === "reported location" ? "Feed coordinates" : item.place}</span>}
             </button>
           </li>
         ))}

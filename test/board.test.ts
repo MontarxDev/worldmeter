@@ -31,6 +31,25 @@ describe("restored board pieces", () => {
     expect(delta.headline).toContain("No earlier sweep")
   })
 
+  it("pins a headline on the place it names and says the pin is not a measured location", () => {
+    const partial = emptyPartial()
+    partial.headlines.push({
+      title: "Flooding in Lagos",
+      source: "BBC",
+      url: "https://www.bbc.com/news/example",
+      publishedAt: "2026-11-17T21:00:00.000Z",
+      lat: 6.45,
+      lon: 3.39,
+      place: "Lagos",
+    })
+    const snapshot = assembleSnapshot([partial], [], "2026-11-17T21:00:00.000Z", "https://github.com/MontarxDev/worldmeter", null)
+    const news = snapshot.markers.find((marker) => marker.kind === "News")
+    expect(news?.lat).toBeCloseTo(6.45)
+    expect(news?.detail).toContain("Lagos")
+    expect(news?.detail).toContain("not a measured event location")
+    expect(news?.url).toBe("https://www.bbc.com/news/example")
+  })
+
   it("gives a marker a homepage when the adapter has no item URL", () => {
     const marker = placeMarker({
       id: "safe-1",
