@@ -1,0 +1,5 @@
+# Copy to .dev.vars for `wrangler dev`. This file is safe to commit; .dev.vars is not.
+# Wrangler rewrites the local Host header to news.montarx.com, so the dev server
+# opts into an inline sweep with SWEEP_INLINE. Do not set that var in production.
+SWEEP_INLINE=1
+SWEEP_SECRET=local-dev-only

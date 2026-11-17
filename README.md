@@ -1,0 +1,183 @@
+# Worldmeter
+
+Worldmeter is a live public-data board: earthquakes, disasters, markets, radiation, flights, and headlines on one page, with a globe, risk gauges, a news ticker, alert toasts, and honest source status.
+
+It is a derivative of [Crucix](https://github.com/calesthio/Crucix) by calesthio, rebuilt for the Cloudflare Workers free plan. The interface is named **Worldmeter**. Crucix is credited in the footer and on this page. The license is the GNU AGPL v3 (see `LICENSE` and `NOTICE`).
+
+The board sweeps **every 2 minutes**. That interval is the cron trigger in `wrangler.jsonc` and the copy in the UI.
+
+## Run locally
+
+Node.js 22 or newer.
+
+```bash
+npm install
+cp .dev.vars.example .dev.vars
+npm test
+npm run dev
+```
+
+Open http://127.0.0.1:43123 . With no keys, the first request runs a sweep on the Worker. Sources that need a secret show **Not configured**. Sources that respond show **OK** only when the fetch returned items, plus the item count and the time of the last success. **Empty** means the request worked and the payload had nothing in it. **Error** means it failed, and the previous success time is kept.
+
+`npm run dev` builds the client, then starts Wrangler on port 43123. `.dev.vars` sets `SWEEP_INLINE=1` because Wrangler rewrites the local Host header to `news.montarx.com`, so the dev server cannot tell it is localhost from the request alone. That flag runs the sweep inside the page request. Do not set `SWEEP_INLINE` in production. The cron fans the work out so each invocation stays inside the free-plan CPU budget.
+
+## Environment
+
+Copy `.env.example` for the list. Local development reads [`.dev.vars`](https://developers.cloudflare.com/workers/configuration/secrets/). Production secrets are set with `wrangler secret put` and are not stored in `wrangler.jsonc`.
+
+| Variable | Source | Signup |
+| --- | --- | --- |
+| `SWEEP_SECRET` | Shared secret for the cron fan-out. Any long random string. | — |
+| `OPENSANCTIONS_API_KEY` | OpenSanctions search | https://www.opensanctions.org/api/ |
+| `RELIEFWEB_APPNAME` | ReliefWeb **v2** appname. v1 is retired (HTTP 410). | https://apidoc.reliefweb.int/parameters#appname |
+| `CLOUDFLARE_RADAR_TOKEN` | Radar outage annotations. Token permission: Account Analytics Read. | https://dash.cloudflare.com/profile/api-tokens |
+| `ACLED_EMAIL`, `ACLED_PASSWORD` | ACLED OAuth password grant | https://acleddata.com/register/ |
+| `FRED_API_KEY` | Optional FRED series (fed funds, CPI). The yield-curve and HY gauges use public CSVs and do not need this. | https://fred.stlouisfed.org/docs/api/api_key.html |
+| `EIA_API_KEY` | Optional WTI spot | https://www.eia.gov/opendata/register.php |
+| `FIRMS_MAP_KEY` | Optional NASA FIRMS thermal detections | https://firms.modaps.eosdis.nasa.gov/api/area/ |
+| `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` | Optional r/worldnews listing | https://www.reddit.com/prefs/apps |
+
+`SOURCE_REPO_URL` is a plain var in `wrangler.jsonc`, not a secret. Set it to the public git URL before you serve Worldmeter to anyone else. The footer link **Source code** points there. Until it is set, the link stays on the page and the footer says the URL is unset. Upstream Crucix remains linked either way.
+
+Do not name the Radar token `CLOUDFLARE_API_TOKEN`. Wrangler uses that name for deploy credentials.
+
+## What the gauges are
+
+Each gauge is a 0–100 score from one named series. The formula is on the card.
+
+| Gauge | Input | Score |
+| --- | --- | --- |
+| VIX | CBOE VIX last price from Yahoo Finance | `clamp(level / 40 × 100, 0, 100)` |
+| 10Y–2Y Treasury | FRED `T10Y2Y` public CSV | `clamp((1.25 − spread) / 2.5 × 100, 0, 100)` |
+| GSCPI | NY Fed Global Supply Chain Pressure Index, latest vintage | `clamp((value + 2) / 5 × 100, 0, 100)` |
+| HY OAS | FRED `BAMLH0A0HYM2` public CSV | `clamp(oas / 8 × 100, 0, 100)` |
+| USGS M4.5+ (24h) | Count of USGS events in the last 24 hours, cap 50 | `clamp(count / 25 × 100, 0, 100)` |
+
+Market percents are `(last − prior session close) / prior session close`. The prior close is the previous daily bar, or last price minus Yahoo's session dollar change. It is never the first close in a multi-day chart (`chartPreviousClose`), which made VIX look like +45% when the session move was about +14%, and the S&P look like about −2.5% when the session move was about −1.2%.
+
+## Alerts
+
+- **Earthquakes.** USGS PAGER color and the tsunami flag decide the tier. An M6+ with a green PAGER is routine, not a flash. Red, or orange at M6.5+, or a tsunami flag at M7+, is a flash.
+- **Radiation.** A flash or priority toast needs a real jump over that sensor's baseline (at least 3× and a minimum absolute rise, sample newer than 48 hours) **and** a nearby reading from the other network (Safecast and EPA RadNet within 800 km). One sensor is routine at most. Two Safecast sites do not corroborate each other.
+- Toasts are only flash and priority. They sit in the page under the ticker, in a row on a wide screen and stacked on a phone, so they do not cover the header, the gauges, or the map.
+
+EONET is labeled as events in the last 30 days, not as “open” incidents.
+
+## Sources
+
+| Source | Auth | Notes |
+| --- | --- | --- |
+| USGS earthquakes | None | M4.5+ for 24h, PAGER and tsunami flag. Global, including Africa. |
+| NASA EONET | None | Events in the last 30 days. |
+| GDACS | None | Current disaster list and alert color. |
+| NOAA/NWS | None | Active alert count, extreme alerts plotted. |
+| BBC World | None | RSS. |
+| The Guardian | None | World RSS. |
+| Al Jazeera | None | RSS. Added for coverage outside the US/UK wires. |
+| WHO | None | English news RSS. |
+| GDELT | None | DOC 2.0 article list. One request per sweep. |
+| Yahoo Finance | None | Six symbols. Session change uses the prior close. |
+| Frankfurter / ECB | None | USD crosses, including ZAR and NGN. |
+| US Treasury debt | None | Debt to the penny. Shown as a figure, not a gauge. |
+| FRED 10Y–2Y CSV | None | Public graph CSV. |
+| FRED HY OAS CSV | None | Public graph CSV for BAMLH0A0HYM2. |
+| NY Fed GSCPI | None | Latest vintage of the supply-chain index. |
+| BLS unemployment | None | `LNS14000000` via the public API. |
+| Open-Meteo | None | Eight cities, including Lagos, Nairobi, Johannesburg, and Cairo, so Africa is not an empty camera. |
+| CISA KEV | None | Catalog header and the newest CVEs. The file is large; the Worker reads the head. |
+| CelesTrak | None | Stations group (ISS and crew vehicles). |
+| ISS position | None | wheretheiss.at. Added because a TLE list has no ground position. |
+| NASA DONKI | None | Space-weather notices, NASA `DEMO_KEY`. |
+| adsb.lol | None | Military sample plus Nairobi, Johannesburg, and Cairo. The name on the panel is adsb.lol, not ADS-B Exchange. |
+| Safecast | None | Chernobyl, Zaporizhzhia, Los Angeles, and New York samples. |
+| EPA RadNet | None | Near-real-time gamma dose from the official RadNet CSV for Los Angeles and New York. The Envirofacts table is gone. The Worker keeps the tail of the year file. |
+| OFAC SDN | None | Official `SDN.XML`. The publication header (record count and publish date) is cached in the snapshot. The full file is tens of megabytes and is not parsed inside a free-plan invocation. |
+| Bluesky | None | Public search. A 403 stays an error. |
+| OpenSanctions | Key | Not configured until `OPENSANCTIONS_API_KEY` is set. |
+| ReliefWeb v2 | Appname | Not configured until `RELIEFWEB_APPNAME` is set. |
+| Cloudflare Radar | Token | Not configured until `CLOUDFLARE_RADAR_TOKEN` is set. |
+| ACLED | OAuth | Not configured until email and password are set. |
+| FRED API | Key | Optional. |
+| EIA | Key | Optional. |
+| NASA FIRMS | Key | Optional. Small boxes, including Nigeria. |
+| Reddit | OAuth | Optional. |
+
+### Added beyond a straight port, and why
+
+- **CISA KEV** — exploited vulnerabilities, no key, small enough to summarize.
+- **GDACS** — the same disasters newsrooms already watch, with a real alert color.
+- **Cloudflare Radar** — outage annotations once a token exists.
+- **NASA EONET, USGS, Frankfurter/ECB, BBC, Guardian** — named on their own rows instead of being folded into a bundle that shared one timestamp.
+- **Open-Meteo** — no key, and it places real observations in Africa and South America.
+- **Al Jazeera** — a non-Atlantic wire in the ticker.
+- **ISS position** — a single live lat/lon next to the CelesTrak element count.
+- **FRED public CSVs** for the yield curve and high-yield spread, so those gauges are real with zero keys. The FRED API remains a separate, optional source.
+
+### Left out, and why
+
+- **AISStream ship tracking.** It is a websocket. A free Worker invocation cannot hold that stream, so the panel does not pretend AIS is healthy.
+- **USPTO / PatentsView.** The old open API now expects a key and is not a live situational feed.
+- **Telegram channel scraping and KiwiSDR page scraping.** Both were marked healthy without a stable record of their own. They are omitted rather than shown as OK.
+- **ADS-B Exchange.** The flight layer is adsb.lol. The paid ADS-B Exchange API is not called.
+- **OpenSky.** Anonymous access is heavily rate limited. adsb.lol covers flights.
+- **UN Comtrade.** Monthly trade, and the current API is keyed. Not a 2-minute monitor.
+- **LLM trade ideas, Telegram bot, Discord bot.** They need long-lived credentials and are outside this board.
+- **IODA outage API.** It returned HTTP 500 during development, so it is not listed as a source.
+
+## Deploy on Cloudflare (free plan)
+
+Do this from a machine logged into the Cloudflare account that already hosts `montarx.com`. This repo does not deploy itself, and it does not add GitHub Actions.
+
+The Worker is static assets plus one script. A cron every 2 minutes (`*/2 * * * *`) POSTs to `/internal/sweep`, which fans out to batch routes. Each batch is its own invocation, because the free plan allows about **10 ms of CPU** and **50 external subrequests** per invocation. One KV write stores the merged snapshot (720 writes/day, under the free 1,000). Reads use the Cache API and a 60 second KV cache TTL so the board does not burn the 100,000 daily reads. Free accounts also allow only a handful of cron triggers per account; this Worker uses one.
+
+```bash
+npm install
+npm test
+npm run build
+
+npx wrangler kv namespace create SNAPSHOTS
+```
+
+Paste the printed id over `kv_namespaces[0].id` in `wrangler.jsonc`. The id in git is a placeholder.
+
+Set the public source URL in `vars.SOURCE_REPO_URL`, then:
+
+```bash
+npx wrangler secret put SWEEP_SECRET
+npx wrangler secret put OPENSANCTIONS_API_KEY
+npx wrangler secret put RELIEFWEB_APPNAME
+npx wrangler secret put CLOUDFLARE_RADAR_TOKEN
+npx wrangler secret put ACLED_EMAIL
+npx wrangler secret put ACLED_PASSWORD
+npx wrangler secret put FRED_API_KEY
+npx wrangler secret put EIA_API_KEY
+npx wrangler secret put FIRMS_MAP_KEY
+npx wrangler secret put REDDIT_CLIENT_ID
+npx wrangler secret put REDDIT_CLIENT_SECRET
+
+npx wrangler deploy
+```
+
+`wrangler.jsonc` attaches the custom domain `news.montarx.com`. The zone for `montarx.com` has to be on the same account. `workers_dev` is off so the board is not also published on a `*.workers.dev` host. Skip any secret you do not have; that source stays **Not configured**. `SWEEP_SECRET` is the one the cron needs. Without it the scheduled sweep logs and exits, and the site keeps serving the last snapshot.
+
+`wrangler secret put` deploys a new version. Set secrets before the first deploy if you want the first cron to succeed, or deploy first and put the secret immediately after.
+
+Check it:
+
+```bash
+curl -s https://news.montarx.com/api/health
+```
+
+Logs and traces are enabled in the Wrangler config. Free-plan log volume is enough for a 2-minute cron.
+
+## Tests
+
+```bash
+npm test
+```
+
+Covers prior-session market math (including the stale 5-day base), earthquake and radiation thresholds, per-source status (OK only with data, separate timestamps, not-configured keys), gauge formulas, African coordinates, the adsb.lol name, and that this README and the cron both say 2 minutes.
+
+## License
+
+GNU AGPL v3. See `LICENSE`. A public network deployment must offer its source. Use the footer **Source code** link and `SOURCE_REPO_URL`.

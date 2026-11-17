@@ -1,0 +1,16 @@
+Worldmeter
+Copyright (C) 2026 Worldmeter contributors
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as published
+by the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+Worldmeter is a derivative of Crucix.
+Upstream: https://github.com/calesthio/Crucix
+Crucix is published by calesthio under the GNU AGPL v3.
+
+The full license text is in the LICENSE file.
+People who interact with a public Worldmeter server are offered this
+program's source from the "Source code" link in the footer. Set
+SOURCE_REPO_URL to the public repository for that deployment.
