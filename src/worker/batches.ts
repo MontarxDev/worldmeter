@@ -2,6 +2,7 @@ import type { RadiationSample } from "../logic/alerts"
 import { emptyPartial, isPager, type SweepPartial } from "../logic/assemble"
 import { MARKET_SYMBOLS, quoteFromChart } from "../logic/markets"
 import { placeMarker } from "../logic/markers"
+import { FIRMS_BOXES } from "../logic/firms"
 import { lastFredObservation, latestGscpi, parseKevHead, parseOfacHeader, parseRadnetTail, parseRssItems } from "../logic/parse"
 import type { SourceAttempt } from "../logic/status"
 import { failureMessage, fetchCapped, fetchTail, present, readJson, USER_AGENT } from "./http"
@@ -844,15 +845,26 @@ async function eia(key: string): Promise<SweepPartial> {
 
 async function firms(key: string): Promise<SweepPartial> {
   return source("firms", async (partial) => {
-    const boxes = ["2,3,14,15", "33,-119,35,-117"]
+    const settled = await Promise.all(FIRMS_BOXES.map(async (box) => {
+      try {
+        const response = await fetchCapped(
+          `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${encodeURIComponent(key)}/VIIRS_SNPP_NRT/${box}/1`,
+          { maxBytes: 48_000, timeoutMs: 12_000 },
+        )
+        if (!response.ok) throw new Error(`HTTP ${response.status} for ${box}`)
+        return { box, text: response.text, error: null as string | null }
+      } catch (error) {
+        return { box, text: "", error: failureMessage(error) }
+      }
+    }))
+    const failures = settled.filter((item) => item.error)
+    if (failures.length === settled.length) {
+      throw new Error(failures.map((item) => item.error).join("; "))
+    }
     let rows = 0
-    for (const box of boxes) {
-      const response = await fetchCapped(
-        `https://firms.modaps.eosdis.nasa.gov/api/area/csv/${encodeURIComponent(key)}/VIIRS_SNPP_NRT/${box}/1`,
-        { maxBytes: 48_000, timeoutMs: 12_000 },
-      )
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const lines = response.text.trim().split("\n")
+    for (const item of settled) {
+      if (!item.text) continue
+      const lines = item.text.trim().split("\n")
       const headers = lines[0]?.split(",") ?? []
       const latIndex = headers.indexOf("latitude")
       const lonIndex = headers.indexOf("longitude")
@@ -874,7 +886,8 @@ async function firms(key: string): Promise<SweepPartial> {
         }))
       }
     }
-    return { itemCount: rows, detail: `${rows} detections in Nigeria and southern California boxes` }
+    const failed = failures.length ? `; failed ${failures.map((item) => item.box).join(", ")}` : ""
+    return { itemCount: rows, detail: `${rows} detections in ${settled.length - failures.length} of ${settled.length} boxes${failed}` }
   })
 }
 
