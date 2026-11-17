@@ -37,7 +37,7 @@ Copy `.env.example` for the list. Local development reads [`.dev.vars`](https://
 | `FIRMS_MAP_KEY` | Optional NASA FIRMS thermal detections | https://firms.modaps.eosdis.nasa.gov/api/area/ |
 | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` | Optional r/worldnews listing | https://www.reddit.com/prefs/apps |
 
-`SOURCE_REPO_URL` is a plain var in `wrangler.jsonc`, not a secret. Set it to the public git URL before you serve Worldmeter to anyone else. The footer link **Source code** points there. Until it is set, the link stays on the page and the footer says the URL is unset. Upstream Crucix remains linked either way.
+`SOURCE_REPO_URL` is a plain var in `wrangler.jsonc`, not a secret. It is set to `https://github.com/MontarxDev/worldmeter`, and the footer **Source code** link points there. Upstream Crucix remains linked either way.
 
 Do not name the Radar token `CLOUDFLARE_API_TOKEN`. Wrangler uses that name for deploy credentials.
 
@@ -130,17 +130,17 @@ Do this from a machine logged into the Cloudflare account that already hosts `mo
 
 The Worker is static assets plus one script. A cron every 2 minutes (`*/2 * * * *`) POSTs to `/internal/sweep`, which fans out to batch routes. Each batch is its own invocation, because the free plan allows about **10 ms of CPU** and **50 external subrequests** per invocation. One KV write stores the merged snapshot (720 writes/day, under the free 1,000). Reads use the Cache API and a 60 second KV cache TTL so the board does not burn the 100,000 daily reads. Free accounts also allow only a handful of cron triggers per account; this Worker uses one.
 
+`compatibility_flags` must include `global_fetch_strictly_public`. Without that flag the Worker cannot reach its own batch routes, and every source reports “Sweep did not report this source.”
+
 ```bash
 npm install
 npm test
 npm run build
-
-npx wrangler kv namespace create SNAPSHOTS
 ```
 
-Paste the printed id over `kv_namespaces[0].id` in `wrangler.jsonc`. The id in git is a placeholder.
+`kv_namespaces[0].id` is the live `SNAPSHOTS` namespace, `14d746f0087748b88fcfc21a8afbe585`. `vars.SOURCE_REPO_URL` is already `https://github.com/MontarxDev/worldmeter`. Keep both, and keep `global_fetch_strictly_public`, so a later `wrangler deploy` matches https://news.montarx.com.
 
-Set the public source URL in `vars.SOURCE_REPO_URL`, then:
+Secrets, if you still need to set any:
 
 ```bash
 npx wrangler secret put SWEEP_SECRET

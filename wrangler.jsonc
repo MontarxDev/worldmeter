@@ -3,6 +3,7 @@
   "name": "worldmeter",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-11-17",
+  "compatibility_flags": ["global_fetch_strictly_public"],
   "workers_dev": false,
   "observability": {
     "enabled": true,
@@ -28,11 +29,11 @@
   "kv_namespaces": [
     {
       "binding": "SNAPSHOTS",
-      "id": "0123456789abcdef0123456789abcdef"
+      "id": "14d746f0087748b88fcfc21a8afbe585"
     }
   ],
   "vars": {
     "PUBLIC_SITE_URL": "https://news.montarx.com",
-    "SOURCE_REPO_URL": ""
+    "SOURCE_REPO_URL": "https://github.com/MontarxDev/worldmeter"
   }
 }
