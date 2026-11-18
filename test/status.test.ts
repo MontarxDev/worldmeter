@@ -176,14 +176,19 @@ describe("gauges and geography", () => {
   })
 })
 
-describe("docs match the two-minute sweep", () => {
-  it("schedules the cron every 2 minutes and does not document a 15-minute sweep", () => {
+describe("docs match the five-minute sweep", () => {
+  it("schedules the cron every 5 minutes and does not document a 15-minute sweep", () => {
     const wrangler = readFileSync(new URL("../wrangler.jsonc", import.meta.url), "utf8")
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8")
-    expect(SWEEP_MINUTES).toBe(2)
-    expect(wrangler).toContain('"*/2 * * * *"')
-    expect(readme).toMatch(/every 2 minutes/)
+    expect(SWEEP_MINUTES).toBe(5)
+    expect(wrangler).toContain('"*/5 * * * *"')
+    expect(readme).toMatch(/every 5 minutes/)
     expect(readme.toLowerCase()).not.toContain("every 15 minutes")
+  })
+
+  it("keeps the one-write-per-sweep KV load under half the free daily write limit", () => {
+    const writesPerDay = (24 * 60) / SWEEP_MINUTES
+    expect(writesPerDay).toBeLessThanOrEqual(500)
   })
 })
 

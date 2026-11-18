@@ -31,7 +31,7 @@ async function snapshotResponse(request: Request, env: WorkerEnv, ctx: Execution
   }
   if (!snapshot) {
     return json(
-      { ready: false, message: "The first sweep has not finished. Feeds are collected every 2 minutes." },
+      { ready: false, message: "The first sweep has not finished. Feeds are collected every 5 minutes." },
       200,
     )
   }
