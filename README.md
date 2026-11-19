@@ -4,7 +4,7 @@ Worldmeter is a live public-data board: earthquakes, disasters, markets, radiati
 
 It is a derivative of [Crucix](https://github.com/calesthio/Crucix) by calesthio, rebuilt for the Cloudflare Workers free plan. The interface is named **Worldmeter**. Crucix is credited in the footer and on this page. The license is the GNU AGPL v3 (see `LICENSE` and `NOTICE`).
 
-The board sweeps **every 5 minutes**. That interval is the cron trigger in `wrangler.jsonc` and the copy in the UI.
+The board sweeps **every 30 minutes**. That interval is the cron trigger in `wrangler.jsonc` and the copy in the UI.
 
 ## Run locally
 
@@ -162,19 +162,19 @@ Crucix is the upstream dashboard (`dashboard/public/jarvis.html`). Worldmeter ke
 - **USPTO / PatentsView.** The old open API now expects a key and is not a live situational feed.
 - **ADS-B Exchange.** The flight layer is adsb.lol. The paid ADS-B Exchange API is not called.
 - **OpenSky.** Anonymous access is heavily rate limited. adsb.lol covers flights.
-- **UN Comtrade.** Monthly trade, and the current API is keyed. Not a 5-minute monitor.
+- **UN Comtrade.** Monthly trade, and the current API is keyed. Not a 30-minute monitor.
 - **LLM trade ideas and AI alert classification.** They need a model key and a long call. The rule-based signals stay.
 - **Telegram bot and Discord bot.** They need long-lived credentials and are not a dashboard view.
 - **Cinematic boot sequence.** It delayed the board without adding data.
 - **“Wartime stagflation” chip.** Crucix hardcoded that sentence. It is not computed from a series.
 - **IODA outage API.** It returned HTTP 500 during development, so it is not listed as a source.
-- **A 15-minute sweep.** Worldmeter sweeps every 5 minutes. The Sources panel is the integrity list: status, count, and last success.
+- **A 15-minute sweep.** Worldmeter sweeps every 30 minutes to keep Cloudflare KV use low on the free plan. The Sources panel is the integrity list: status, count, and last success.
 
 ## Deploy on Cloudflare (free plan)
 
 Do this from a machine logged into the Cloudflare account that already hosts `montarx.com`. This repo does not deploy itself, and it does not add GitHub Actions.
 
-The Worker is static assets plus one script. A cron every 5 minutes (`*/5 * * * *`) POSTs to `/internal/sweep`, which fans out to batch routes. Each batch is its own invocation, because the free plan allows about **10 ms of CPU** and **50 external subrequests** per invocation. One KV write stores the merged snapshot: 288 writes a day, well under the free 1,000. A 2-minute cron was 720 writes a day and set off Cloudflare's 50% KV warning, so keep the interval at 5 minutes or longer on the free plan. Reads use the Cache API and a 60 second KV cache TTL so the board does not burn the 100,000 daily reads. Free accounts also allow only a handful of cron triggers per account; this Worker uses one.
+The Worker is static assets plus one script. A cron every 30 minutes (`*/30 * * * *`) POSTs to `/internal/sweep`, which fans out to batch routes. Each batch is its own invocation, because the free plan allows about **10 ms of CPU** and **50 external subrequests** per invocation. One KV write stores the merged snapshot: 48 writes a day, well under the free 1,000. A 2-minute cron was 720 writes a day and set off Cloudflare's 50% KV warning; keep the interval at 5 minutes or longer on the free plan. Reads use the Cache API and a 60 second KV cache TTL so the board does not burn the 100,000 daily reads. Free accounts also allow only a handful of cron triggers per account; this Worker uses one.
 
 `compatibility_flags` must include `global_fetch_strictly_public`. Without that flag the Worker cannot reach its own batch routes, and every source reports “Sweep did not report this source.”
 
@@ -214,7 +214,7 @@ Check it:
 curl -s https://news.montarx.com/api/health
 ```
 
-Logs and traces are enabled in the Wrangler config. Free-plan log volume is enough for a 5-minute cron.
+Logs and traces are enabled in the Wrangler config. Free-plan log volume is enough for a 30-minute cron.
 
 ## Tests
 
@@ -222,7 +222,7 @@ Logs and traces are enabled in the Wrangler config. Free-plan log volume is enou
 npm test
 ```
 
-Covers prior-session market math (including the stale 5-day base), earthquake and radiation thresholds, per-source status (OK only with data, separate timestamps, not-configured keys), gauge formulas, African coordinates, the adsb.lol name, and that this README and the cron both say 5 minutes, and that the sweep stays under 500 KV writes a day.
+Covers prior-session market math (including the stale 5-day base), earthquake and radiation thresholds, per-source status (OK only with data, separate timestamps, not-configured keys), gauge formulas, African coordinates, the adsb.lol name, and that this README and the cron both say 30 minutes, and that the sweep stays under 500 KV writes a day.
 
 ## License
 

@@ -202,7 +202,7 @@ export function App() {
       <header className="top">
         <div className="brand">
           <h1>Worldmeter</h1>
-          <p>{snapshot ? `Swept ${age(snapshot.generatedAt)} · every ${snapshot.sweepMinutes} minutes` : "Public feeds, swept every 5 minutes"}</p>
+          <p>{snapshot ? `Swept ${age(snapshot.generatedAt)} · every ${snapshot.sweepMinutes} minutes` : "Public feeds, swept every 30 minutes"}</p>
         </div>
         <div className="regions" role="group" aria-label="Region">
           {REGION_IDS.map((id) => (
@@ -487,7 +487,7 @@ export function App() {
       <footer className="foot" id="source">
         <p>
           Worldmeter is a derivative of <a href="https://github.com/calesthio/Crucix">Crucix</a> by calesthio, licensed under the GNU AGPL v3.
-          Feeds are fetched on the server every 5 minutes.
+          Feeds are fetched on the server every 30 minutes.
         </p>
         <a href={snapshot?.sourceRepoUrl || "#source"}>Source code</a>
       </footer>
